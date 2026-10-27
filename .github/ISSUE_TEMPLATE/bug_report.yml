@@ -1,0 +1,55 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never post your tokens or cookies** (ltoken, ltuid, cookie_token). Blur your UID in screenshots.
+  - type: dropdown
+    id: area
+    attributes:
+      label: What isn't working?
+      options:
+        - Daily check-in
+        - Gift codes
+        - Machine Workshop
+        - Sign-in
+        - Updates
+        - Notifications
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Ergon version
+      description: Shown in Settings.
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android version
+      placeholder: Pixel 7, Android 15
+  - type: textarea
+    id: details
+    attributes:
+      label: Extra details
+      description: Anything from the Activity tab, error messages, or screenshots.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I removed any tokens, cookies or UIDs from what I posted.
+          required: true

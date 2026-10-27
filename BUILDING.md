@@ -16,7 +16,7 @@ signed APK and publishes it as a release; the in-app **Update** button downloads
 
 Release signing: create a private key once and keep a backup (losing it means users must reinstall):
 
-    keytool -genkeypair -v -keystore ergon-release.jks -alias ergon -keyalg RSA -keysize 2048 -validity 100000
+    keytool -genkeypair -v -keystore ergon-release.jks -alias ergon -keyalg RSA -keysize 2048 -validity 36500
 
 Then add these repository secrets (Settings > Secrets and variables > Actions): `ERGON_KEYSTORE_BASE64`
 (the .jks file, base64-encoded), `ERGON_KEYSTORE_PASSWORD`, `ERGON_KEY_ALIAS`, `ERGON_KEY_PASSWORD`.
