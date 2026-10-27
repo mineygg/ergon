@@ -1,0 +1,19 @@
+# Build output & caches
+.gradle/
+.kotlin/
+build/
+captures/
+
+# IDE & configuration files
+.idea/
+*.iml
+local.properties
+
+# OS files
+.DS_Store
+
+# Signing keys: never commit
+*.jks
+*.keystore
+*.apk
+*.aab

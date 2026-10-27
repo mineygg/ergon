@@ -1,0 +1,17 @@
+NOTICES AND THIRD-PARTY LICENSES
+
+Ergon for Android is free software released under the GNU General Public License v3.0
+(see "GNU GPL v3" tab).
+
+This app uses the following open-source components:
+
+  - AndroidX, Jetpack Compose, Material 3, WorkManager, Security Crypto, WebKit
+    (Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0)
+  - Kotlin and kotlinx.coroutines (Apache License 2.0)
+  - OkHttp (Apache License 2.0)
+  - jsoup (MIT License)
+  - Material icons (Apache License 2.0)
+  - GitHub mark from Octicons (MIT License)
+
+Disclaimer: this app is unofficial and is not affiliated with, endorsed by or sponsored by HoYoverse,
+COGNOSPHERE or miHoYo. All game names and trademarks belong to their respective owners.
