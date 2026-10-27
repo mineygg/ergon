@@ -54,4 +54,4 @@ and at your own risk.
 See [BUILDING.md](BUILDING.md).
 
 **License**
-GNU General Public License v3.0 (see `LICENSE`).
+Copyright (C) 2026 mineygg. GNU General Public License v3.0 (see `LICENSE`), with the attribution terms in `NOTICE`.

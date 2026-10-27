@@ -1,5 +1,14 @@
 NOTICES AND THIRD-PARTY LICENSES
 
+Ergon
+Copyright (C) 2026 mineygg
+Original project: https://github.com/mineygg/ergon
+
+Additional terms under section 7 of the GNU GPL v3: any copy, fork or modified version of this work, and
+any app built from it, must keep this copyright notice and the link to the original project, including in
+the legal notices shown to users. Modified versions must be marked as modified and must not be presented
+as the original Ergon.
+
 Ergon for Android is free software released under the GNU General Public License v3.0
 (see "GNU GPL v3" tab).
 

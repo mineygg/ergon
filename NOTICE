@@ -1,0 +1,18 @@
+Ergon
+Copyright (C) 2026 mineygg
+Original project: https://github.com/mineygg/ergon
+
+Ergon is free software licensed under the GNU General Public License v3.0 (see LICENSE).
+
+Additional terms under section 7 of the GNU GPL v3:
+
+  Preservation of notices (section 7(b)): any copy, fork or modified version of this work, and any app
+  built from it, must keep this copyright notice and the link to the original project above, both in the
+  source (this NOTICE file) and in the legal notices shown to users (for an app, its About or License
+  screen).
+
+  Origin (section 7(c)): modified versions must be clearly marked as modified and must not be presented
+  as the original Ergon.
+
+Everything else is governed by the GPL v3. Third-party components used by the app are listed in
+app/src/main/res/raw/notices.txt.
