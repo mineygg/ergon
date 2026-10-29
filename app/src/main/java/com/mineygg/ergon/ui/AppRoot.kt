@@ -37,9 +37,11 @@ fun AppRoot(vm: MainViewModel) {
     var loginStep by rememberSaveable { mutableIntStateOf(1) }
 
     var showLicense by rememberSaveable { mutableStateOf(false) }
+    var showExchange by rememberSaveable { mutableStateOf(false) }
 
     BackHandler(enabled = showLogin) { showLogin = false }
     BackHandler(enabled = showLicense) { showLicense = false }
+    BackHandler(enabled = showExchange) { showExchange = false }
 
     val openLogin: (Int) -> Unit = { step ->
         loginStep = step
@@ -48,6 +50,11 @@ fun AppRoot(vm: MainViewModel) {
 
     if (showLicense) {
         LicenseScreen(onClose = { showLicense = false })
+        return
+    }
+
+    if (showExchange) {
+        ExchangeScreen(vm, onClose = { showExchange = false })
         return
     }
 
@@ -83,7 +90,7 @@ fun AppRoot(vm: MainViewModel) {
         when (tab) {
             Tab.Home -> HomeScreen(vm, pad, openLogin)
             Tab.Activity -> ActivityScreen(vm, pad)
-            Tab.Settings -> SettingsScreen(vm, pad, openLogin, onLicense = { showLicense = true })
+            Tab.Settings -> SettingsScreen(vm, pad, openLogin, onLicense = { showLicense = true }, onExchange = { showExchange = true })
         }
     }
 }

@@ -41,10 +41,17 @@ import com.mineygg.ergon.R
 import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.Time
 import com.mineygg.ergon.core.Updater
+import com.mineygg.ergon.data.ExchangeMode
 import com.mineygg.ergon.data.ThemeMode
 
 @Composable
-fun SettingsScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit, onLicense: () -> Unit) {
+fun SettingsScreen(
+    vm: MainViewModel,
+    pad: PaddingValues,
+    onLogin: (Int) -> Unit,
+    onLicense: () -> Unit,
+    onExchange: () -> Unit
+) {
     val s by vm.settings.collectAsStateWithLifecycle()
     val creds by vm.creds.collectAsStateWithLifecycle()
     val update by vm.updateState.collectAsStateWithLifecycle()
@@ -94,7 +101,7 @@ fun SettingsScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit
                     VSpace(2)
                     Text("Gift codes hourly", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                     VSpace(2)
-                    Text("Workshop around each game reset", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                    Text("Workshop and auto exchange around each game reset", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                 }
                 HorizontalDivider(color = cs.outlineVariant)
                 ToggleRow("Notifications", "Daily summary and session alerts", s.notify) { on ->
@@ -115,6 +122,24 @@ fun SettingsScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit
                 HorizontalDivider(color = cs.outlineVariant)
                 ToggleRow("Machine Workshop", "Genshin web event", s.workshop) { on ->
                     vm.updateSettings { it.copy(workshop = on) }
+                }
+                HorizontalDivider(color = cs.outlineVariant)
+                ToggleRow("Auto exchange", "Spend workshop points on rewards", s.autoExchange) { on ->
+                    vm.updateSettings { it.copy(autoExchange = on) }
+                }
+                if (s.autoExchange) {
+                    VSpace(4)
+                    OutlinedButton(
+                        onClick = onExchange,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
+                    ) { Text("Exchange priority") }
+                    VSpace(6)
+                    Text(
+                        exchangeSummary(s.exchangePriority.size, s.exchangeMode),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -231,6 +256,11 @@ fun SettingsScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit
             dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancel") } }
         )
     }
+}
+
+private fun exchangeSummary(count: Int, mode: ExchangeMode): String {
+    val list = if (count == 0) "No priority set, only free rewards are claimed" else "$count in the priority list"
+    return list + " · " + if (mode == ExchangeMode.WAIT) "waits for points" else "claims what it can afford"
 }
 
 @Composable

@@ -31,6 +31,33 @@ data class WorkshopTask(
     }
 }
 
+/** One reward in the event's exchange shop (exchange_list). */
+data class ExchangeAward(
+    val id: Int,
+    val status: Int,
+    val name: String,
+    val cost: Int,
+    val stock: Int,
+    val nextRefresh: Long, // epoch seconds, 0 = not on a timer
+    val expireDays: Int
+) {
+    /** Can be claimed right now: available and not sitting on a refresh timer. */
+    val claimable: Boolean get() = status == STATUS_AVAILABLE && nextRefresh == 0L
+
+    /** Timed reward that is on cooldown. Only looked at again on the next normal workshop run. */
+    val timed: Boolean get() = nextRefresh != 0L
+
+    companion object {
+        /** exchange_list status: 1 = can be claimed, 3 = already claimed, 4 = out of stock. 2 is not understood (not claimable). */
+        const val STATUS_AVAILABLE = 1
+        const val STATUS_CLAIMED = 3
+        const val STATUS_SOLD_OUT = 4
+    }
+}
+
+/** Result of a successful exchange. [code] is only set for rewards delivered as an in-game redeem code. */
+data class ExchangeOutcome(val result: ApiResult, val code: String)
+
 /** "Hilichurls' Machine Workshop" (HoYoLAB web event). Endpoints as captured from the event page. */
 object WorkshopApi {
     private const val ACT = "https://sg-act-public-api.hoyolab.com/event/e2023mimotravel/qiuqiu"
@@ -96,4 +123,32 @@ object WorkshopApi {
 
     suspend fun receive(cr: Credentials, act: WorkshopAct, taskId: Int): ApiResult =
         HoyoApi.call("$ACT/receive_point?lang=en-us", cr.hoyolabCookie(), body(act, taskId))
+
+    /** Every reward of the exchange shop, in the order the server lists them (claimed ones included). */
+    suspend fun exchangeList(cr: Credentials, act: WorkshopAct): Pair<ApiResult, List<ExchangeAward>> {
+        val r = HoyoApi.call(
+            "$ACT/exchange_list?game_id=${act.gameId}&version_id=${act.versionId}&lang=en-us",
+            cr.hoyolabCookie()
+        )
+        val arr = r.data?.optJSONArray("exchange_award_list") ?: return r to emptyList()
+        val list = List(arr.length()) { i ->
+            val o = arr.getJSONObject(i)
+            ExchangeAward(
+                id = o.getInt("award_id"),
+                status = o.optInt("status"),
+                name = o.optString("name"),
+                cost = o.optInt("cost"),
+                stock = o.optInt("stock"),
+                nextRefresh = o.optLong("next_refresh_time"),
+                expireDays = o.optInt("expire_day")
+            )
+        }
+        return r to list
+    }
+
+    suspend fun exchange(cr: Credentials, act: WorkshopAct, awardId: Int): ExchangeOutcome {
+        val body = JSONObject().put("award_id", awardId).put("game_id", act.gameId).put("version_id", act.versionId)
+        val r = HoyoApi.call("$ACT/exchange?lang=en-us", cr.hoyolabCookie(), body)
+        return ExchangeOutcome(r, r.data?.optString("exchange_code").orEmpty())
+    }
 }

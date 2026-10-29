@@ -37,7 +37,14 @@ It runs on its own from there.
 **Machine Workshop**
 - Each task gets one attempt to be completed through the API per day or week. If the server refuses
   (for example it needs in-game play), the task is only watched, and claimed once its progress is complete.
-- Tasks already claimed are skipped. Spending points (prize draw, exchange) is left to you.
+- Tasks already claimed are skipped. Spending points on the prize draw is left to you.
+- **Auto exchange** (Settings, off by default): after the tasks, the exchange shop is read once per run.
+  Rewards that cost 0 are always claimed. Then the rewards in your **Exchange priority** list are claimed
+  top to bottom. If the top reward costs more than you have, the mode decides: *Wait for points* keeps
+  saving, *Claim what I can afford* moves on to the next affordable one.
+- Claimed rewards are hidden. Timed rewards (on a refresh timer) are listed but not claimable until they
+  refresh; they have no timer of their own and are only checked on the normal Machine Workshop runs.
+- Every Machine Workshop claim request is sent at least 5 seconds after the previous one.
 
 **Other**
 - Background runs use Android's WorkManager, so they happen even when the app is closed. Phones with strict

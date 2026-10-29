@@ -40,6 +40,12 @@ object Notifier {
     fun workshopPoints(ctx: Context, gained: Int, total: Int) =
         post(ctx, 4, CH_RESULT, "Machine Workshop: +$gained points", "You now have $total points.")
 
+    fun exchangeClaimed(ctx: Context, names: List<String>, codes: List<String>) {
+        val n = names.size
+        val text = (names + codes).joinToString("\n")
+        post(ctx, 5, CH_RESULT, "Exchanged $n reward${if (n == 1) "" else "s"}", text)
+    }
+
     fun alert(ctx: Context, title: String, text: String) = post(ctx, 2, CH_ALERT, title, text)
 
     private fun post(ctx: Context, id: Int, channel: String, title: String, text: String) {

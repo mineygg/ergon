@@ -51,6 +51,11 @@ class Store(ctx: Context) {
             checkin = sp.getBoolean("checkin", d.checkin),
             autoRedeem = sp.getBoolean("autoRedeem", d.autoRedeem),
             workshop = sp.getBoolean("workshop", d.workshop),
+            autoExchange = sp.getBoolean("autoExchange", d.autoExchange),
+            exchangeMode = runCatching { ExchangeMode.valueOf(sp.getString("exchangeMode", d.exchangeMode.name).orEmpty()) }
+                .getOrDefault(d.exchangeMode),
+            exchangePriority = sp.getString("exchangePriority", null).orEmpty()
+                .split(',').mapNotNull { it.trim().toIntOrNull() }.distinct(),
             notify = sp.getBoolean("notify", d.notify),
             checkUpdates = sp.getBoolean("checkUpdates", d.checkUpdates)
         )
@@ -66,6 +71,9 @@ class Store(ctx: Context) {
             .putBoolean("checkin", n.checkin)
             .putBoolean("autoRedeem", n.autoRedeem)
             .putBoolean("workshop", n.workshop)
+            .putBoolean("autoExchange", n.autoExchange)
+            .putString("exchangeMode", n.exchangeMode.name)
+            .putString("exchangePriority", n.exchangePriority.joinToString(","))
             .putBoolean("notify", n.notify)
             .putBoolean("checkUpdates", n.checkUpdates)
             .apply()

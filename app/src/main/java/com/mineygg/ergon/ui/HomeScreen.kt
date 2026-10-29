@@ -414,11 +414,12 @@ private fun WorkshopCard(
             StatTile(info?.points?.toString() ?: "—", "Points", extra.success, Modifier.weight(1f))
             StatTile(daysLeft?.let { "${it}d" } ?: "—", "Event left", cs.primary, Modifier.weight(1f))
         }
-        if (info != null && (info.lottery || info.exchange)) {
+        if ((info != null && (info.lottery || info.exchange)) || settings.autoExchange) {
             VSpace(10)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (info.lottery) Pill("Prize draw open", cs.secondary)
-                if (info.exchange) Pill("Exchange open", cs.secondary)
+                if (info?.lottery == true) Pill("Prize draw open", cs.secondary)
+                if (info?.exchange == true) Pill("Exchange open", cs.secondary)
+                if (settings.autoExchange) Pill("Auto exchange on", extra.success)
             }
         }
         if (running) {

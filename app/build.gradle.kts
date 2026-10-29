@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = (findProperty("ergonVersionCode") as String?)?.toIntOrNull() ?: 1
-        versionName = (findProperty("ergonVersionName") as String?) ?: "1.0.0"
+        versionName = (findProperty("ergonVersionName") as String?) ?: "1.1.0"
     }
 
     // Release signing key comes from the environment (CI secrets). Without it, builds fall back to the

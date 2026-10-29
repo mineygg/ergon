@@ -6,6 +6,15 @@ import org.json.JSONObject
 
 enum class ThemeMode { SYSTEM, DARK, LIGHT }
 
+/** What auto-exchange does when the top-priority reward costs more points than we have. */
+enum class ExchangeMode {
+    /** Keep the points and wait until the top-priority reward can be afforded. */
+    WAIT,
+
+    /** Claim the first reward in the priority list that is affordable right now. */
+    AFFORDABLE
+}
+
 data class Settings(
     val theme: ThemeMode = ThemeMode.DARK,
     val autoRun: Boolean = true,
@@ -13,6 +22,9 @@ data class Settings(
     val checkin: Boolean = true,
     val autoRedeem: Boolean = true,
     val workshop: Boolean = true,
+    val autoExchange: Boolean = false,
+    val exchangeMode: ExchangeMode = ExchangeMode.WAIT,
+    val exchangePriority: List<Int> = emptyList(), // award ids, most wanted first
     val notify: Boolean = true,
     val checkUpdates: Boolean = true
 )
