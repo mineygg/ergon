@@ -62,7 +62,13 @@ fun Pill(text: String, color: Color) {
             .background(color.copy(alpha = 0.14f))
             .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
-        Text(text, color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            text,
+            color = color,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
     }
 }
 

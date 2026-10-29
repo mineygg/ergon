@@ -1,5 +1,6 @@
 package com.mineygg.ergon.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -28,6 +30,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -127,20 +133,16 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
                                 ranked.forEachIndexed { i, a ->
                                     if (i > 0) HorizontalDivider(color = cs.outlineVariant)
                                     AwardRow(a, st.points, rank = i + 1) {
-                                        IconButton(
-                                            onClick = { vm.updateSettings { it.copy(exchangePriority = move(it.exchangePriority, rankedIds, a.id, -1)) } },
-                                            enabled = i > 0,
-                                            modifier = Modifier.size(36.dp)
-                                        ) { Text("▲") }
-                                        IconButton(
-                                            onClick = { vm.updateSettings { it.copy(exchangePriority = move(it.exchangePriority, rankedIds, a.id, 1)) } },
-                                            enabled = i < ranked.size - 1,
-                                            modifier = Modifier.size(36.dp)
-                                        ) { Text("▼") }
+                                        MoveButton(up = true, enabled = i > 0) {
+                                            vm.updateSettings { it.copy(exchangePriority = move(it.exchangePriority, rankedIds, a.id, -1)) }
+                                        }
+                                        MoveButton(up = false, enabled = i < ranked.size - 1) {
+                                            vm.updateSettings { it.copy(exchangePriority = move(it.exchangePriority, rankedIds, a.id, 1)) }
+                                        }
                                         IconButton(
                                             onClick = { vm.updateSettings { it.copy(exchangePriority = it.exchangePriority - a.id) } },
                                             modifier = Modifier.size(36.dp)
-                                        ) { Icon(Icons.Default.Close, contentDescription = "Remove") }
+                                        ) { Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(20.dp)) }
                                     }
                                 }
                             }
@@ -200,6 +202,26 @@ private fun move(order: List<Int>, visible: List<Int>, id: Int, delta: Int): Lis
     next[a] = other
     next[b] = id
     return next
+}
+
+/** Up/down button with a thin chevron (drawn, so it needs no icon library). */
+@Composable
+private fun MoveButton(up: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val color = LocalContentColor.current.copy(alpha = if (enabled) 1f else 0.3f)
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(36.dp)) {
+        Canvas(Modifier.size(18.dp)) {
+            val w = size.width
+            val h = size.height
+            val y1 = if (up) h * 0.65f else h * 0.35f
+            val y2 = if (up) h * 0.35f else h * 0.65f
+            val path = Path().apply {
+                moveTo(w * 0.15f, y1)
+                lineTo(w * 0.5f, y2)
+                lineTo(w * 0.85f, y1)
+            }
+            drawPath(path, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+    }
 }
 
 @Composable

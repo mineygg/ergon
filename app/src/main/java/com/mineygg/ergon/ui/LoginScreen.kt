@@ -67,11 +67,29 @@ import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import com.mineygg.ergon.MainViewModel
 import com.mineygg.ergon.core.DeviceHeaders
+import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.HoyoApi
+import com.mineygg.ergon.data.Credentials
 import kotlinx.coroutines.delay
 
 private const val HOYOLAB_URL = "https://www.hoyolab.com/home"
-private const val REDEEM_URL = "https://genshin.hoyoverse.com/en/gift"
+
+/** Redeem page per game, in the order we prefer when the account plays several. */
+private val REDEEM_PAGES = listOf(
+    Game.GENSHIN to "https://genshin.hoyoverse.com/en/gift",
+    Game.HSR to "https://hsr.hoyoverse.com/gift",
+    Game.ZZZ to "https://zenless.hoyoverse.com/redemption"
+)
+
+/** Redeem page of the first game (Genshin, then Star Rail, then Zenless) this account actually has, or null. */
+private suspend fun redeemPageFor(cr: Credentials): String? {
+    for ((game, url) in REDEEM_PAGES) {
+        val biz = game.redeem?.gameBiz ?: continue
+        if (HoyoApi.discover(biz, cr).isNotEmpty()) return url
+    }
+    return null
+}
+
 private val REDEEM_SITES = listOf(
     "https://genshin.hoyoverse.com",
     "https://hsr.hoyoverse.com",
@@ -132,6 +150,7 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
     var pageUrl by remember { mutableStateOf("") }
     var popup by remember { mutableStateOf<WebView?>(null) }
     var popupUrl by remember { mutableStateOf("") }
+    var redeemUrl by remember { mutableStateOf<String?>(null) }
 
     // If the redeem session was flagged expired, don't accept the same stale cookie again.
     val staleCookieToken = remember { vm.creds.value.let { if (it.loginExpired) it.cookieToken else "" } }
@@ -140,6 +159,16 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
     // typing anything. (Signing out in Settings clears them, which is how you switch accounts.)
     LaunchedEffect(step, accepted) {
         if (!accepted) return@LaunchedEffect
+        if (step == 2 && redeemUrl == null) {
+            // Only send the player to a game they actually have, otherwise there is nothing to sign in to.
+            val url = redeemPageFor(vm.creds.value)
+            if (url == null) {
+                onClose()
+                return@LaunchedEffect
+            }
+            redeemUrl = url
+            holder.view?.loadUrl(url)
+        }
         var lastTried = ""
         while (true) {
             delay(1000)
@@ -154,7 +183,6 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
                 if (HoyoApi.validateHoyolab(token, uid)) {
                     vm.saveHoyolab(token, uid)
                     step = 2
-                    holder.view?.loadUrl(REDEEM_URL)
                     break
                 }
             } else {
@@ -286,7 +314,7 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
                                     }
                                 }
                                 holder.view = this
-                                loadUrl(if (step == 1) HOYOLAB_URL else REDEEM_URL)
+                                loadUrl(if (step == 1) HOYOLAB_URL else redeemUrl ?: "about:blank")
                             }
                         }
                     )
