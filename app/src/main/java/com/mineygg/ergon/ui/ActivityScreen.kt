@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mineygg.ergon.MainViewModel
 import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.Task
+import com.mineygg.ergon.core.WorkshopGame
 import com.mineygg.ergon.data.ItemState
 import com.mineygg.ergon.data.RecordItem
 import com.mineygg.ergon.data.RunRecord
@@ -130,7 +131,7 @@ private fun RecordCard(r: RunRecord) {
     val title = when (r.task) {
         "CHECKIN" -> "Daily check-in"
         "REDEEM" -> "Gift codes"
-        else -> "Machine Workshop"
+        else -> WorkshopGame.entries.firstOrNull { it.recordTask == r.task }?.label ?: "Machine Workshop"
     }
     val shown = r.items.take(8)
 

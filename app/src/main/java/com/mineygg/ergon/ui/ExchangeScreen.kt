@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,22 +41,24 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mineygg.ergon.MainViewModel
 import com.mineygg.ergon.ShopState
 import com.mineygg.ergon.core.ExchangeAward
+import com.mineygg.ergon.core.WorkshopGame
 import com.mineygg.ergon.data.ExchangeMode
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * Machine Workshop exchange shop: the order here is the priority auto-exchange follows,
- * plus the mode that decides what happens when the top reward is too expensive.
+ * Exchange shop of one game's event (Machine Workshop or Traveling Mimo): the order here is the priority
+ * auto-exchange follows, plus the mode that decides what happens when the top reward is too expensive.
  */
 @Composable
-fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
+fun ExchangeScreen(vm: MainViewModel, game: WorkshopGame, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val s by vm.settings.collectAsStateWithLifecycle()
     val shop by vm.shop.collectAsStateWithLifecycle()
+    val prefs = s.exchangePrefs(game)
 
-    LaunchedEffect(Unit) { vm.loadShop() }
+    LaunchedEffect(game) { vm.loadShop(game) }
 
     Surface(Modifier.fillMaxSize(), color = cs.background, contentColor = cs.onBackground) {
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
@@ -65,7 +68,7 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
                     Text("Exchange priority", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     val points = (shop as? ShopState.Ready)?.points
                     Text(
-                        if (points != null) "You have $points points" else "Machine Workshop",
+                        if (points != null) "${game.game.title} · you have $points points" else "${game.game.title} · ${game.eventName}",
                         style = MaterialTheme.typography.bodySmall,
                         color = cs.onSurfaceVariant
                     )
@@ -79,19 +82,38 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
             ) {
                 item {
                     AppCard {
-                        Text("WHEN I CAN'T AFFORD THE TOP REWARD", style = MaterialTheme.typography.labelMedium, color = cs.primary, fontWeight = FontWeight.Bold)
+                        Text("WHAT TO DO WITH MY POINTS", style = MaterialTheme.typography.labelMedium, color = cs.primary, fontWeight = FontWeight.Bold)
                         VSpace(6)
                         ModeRow(
                             "Wait for points",
                             "Keep saving until the top reward can be claimed. Lower ones are not touched.",
-                            s.exchangeMode == ExchangeMode.WAIT
-                        ) { vm.updateSettings { it.copy(exchangeMode = ExchangeMode.WAIT) } }
+                            prefs.mode == ExchangeMode.WAIT
+                        ) { vm.updateSettings { it.withExchange(game) { p -> p.copy(mode = ExchangeMode.WAIT) } } }
                         HorizontalDivider(color = cs.outlineVariant)
                         ModeRow(
                             "Claim what I can afford",
                             "Skip rewards that cost more than I have and claim the next affordable one in the list.",
-                            s.exchangeMode == ExchangeMode.AFFORDABLE
-                        ) { vm.updateSettings { it.copy(exchangeMode = ExchangeMode.AFFORDABLE) } }
+                            prefs.mode == ExchangeMode.AFFORDABLE
+                        ) { vm.updateSettings { it.withExchange(game) { p -> p.copy(mode = ExchangeMode.AFFORDABLE) } } }
+                        if (game.canDraw) {
+                            HorizontalDivider(color = cs.outlineVariant)
+                            ModeRow(
+                                "Prize draw only",
+                                "Don't claim any reward. Spend the points on prize draws instead.",
+                                prefs.mode == ExchangeMode.DRAW
+                            ) { vm.updateSettings { it.withExchange(game) { p -> p.copy(mode = ExchangeMode.DRAW) } } }
+                            HorizontalDivider(color = cs.outlineVariant)
+                            DrawToggleRow(
+                                "Draw when nothing is left to claim",
+                                if (prefs.mode == ExchangeMode.DRAW) {
+                                    "Not needed: prize draw only always draws."
+                                } else {
+                                    "Once no reward in the list is left to claim, spend spare points on prize draws. Not while saving for a reward."
+                                },
+                                prefs.drawWhenIdle,
+                                enabled = prefs.mode != ExchangeMode.DRAW
+                            ) { on -> vm.updateSettings { it.withExchange(game) { p -> p.copy(drawWhenIdle = on) } } }
+                        }
                     }
                 }
 
@@ -106,7 +128,7 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
                         AppCard {
                             Text(st.message, style = MaterialTheme.typography.bodyMedium)
                             VSpace(12)
-                            OutlinedButton(onClick = vm::loadShop, modifier = Modifier.fillMaxWidth()) { Text("Try again") }
+                            OutlinedButton(onClick = { vm.loadShop(game) }, modifier = Modifier.fillMaxWidth()) { Text("Try again") }
                         }
                     }
 
@@ -116,7 +138,7 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
                         val free = open.filter { it.cost == 0 }
                         val paid = open.filter { it.cost > 0 }
                         val byId = paid.associateBy { it.id }
-                        val ranked = s.exchangePriority.mapNotNull { byId[it] }
+                        val ranked = prefs.priority.mapNotNull { byId[it] }
                         val rankedIds = ranked.map { it.id }
                         val rest = paid.filter { it.id !in rankedIds }
 
@@ -134,13 +156,13 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
                                     if (i > 0) HorizontalDivider(color = cs.outlineVariant)
                                     AwardRow(a, st.points, rank = i + 1) {
                                         MoveButton(up = true, enabled = i > 0) {
-                                            vm.updateSettings { it.copy(exchangePriority = move(it.exchangePriority, rankedIds, a.id, -1)) }
+                                            vm.updateSettings { it.withExchange(game) { p -> p.copy(priority = move(p.priority, rankedIds, a.id, -1)) } }
                                         }
                                         MoveButton(up = false, enabled = i < ranked.size - 1) {
-                                            vm.updateSettings { it.copy(exchangePriority = move(it.exchangePriority, rankedIds, a.id, 1)) }
+                                            vm.updateSettings { it.withExchange(game) { p -> p.copy(priority = move(p.priority, rankedIds, a.id, 1)) } }
                                         }
                                         IconButton(
-                                            onClick = { vm.updateSettings { it.copy(exchangePriority = it.exchangePriority - a.id) } },
+                                            onClick = { vm.updateSettings { it.withExchange(game) { p -> p.copy(priority = p.priority - a.id) } } },
                                             modifier = Modifier.size(36.dp)
                                         ) { Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(20.dp)) }
                                     }
@@ -156,7 +178,7 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
                                         if (i > 0) HorizontalDivider(color = cs.outlineVariant)
                                         AwardRow(a, st.points, rank = null) {
                                             TextButton(
-                                                onClick = { vm.updateSettings { it.copy(exchangePriority = it.exchangePriority - a.id + a.id) } }
+                                                onClick = { vm.updateSettings { it.withExchange(game) { p -> p.copy(priority = p.priority - a.id + a.id) } } }
                                             ) { Text("Add") }
                                         }
                                     }
@@ -179,7 +201,8 @@ fun ExchangeScreen(vm: MainViewModel, onClose: () -> Unit) {
                         item {
                             Text(
                                 "Rewards you already own are hidden. Timed rewards show when they refresh and are only " +
-                                    "checked on the normal Machine Workshop runs. Every claim is sent at least 5 seconds apart.",
+                                    "checked on the normal ${game.eventName} runs. Every claim is sent at least 5 seconds apart, " +
+                                    "across all games.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = cs.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 4.dp)
@@ -247,6 +270,20 @@ private fun ModeRow(title: String, subtitle: String, selected: Boolean, onSelect
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun DrawToggleRow(title: String, subtitle: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val dim = if (enabled) 1f else 0.4f
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = cs.onSurface.copy(alpha = dim))
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant.copy(alpha = dim))
+        }
+        HSpace(12)
+        Switch(checked = checked && enabled, onCheckedChange = onChange, enabled = enabled)
     }
 }
 

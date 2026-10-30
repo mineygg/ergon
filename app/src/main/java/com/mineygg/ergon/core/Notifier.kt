@@ -37,13 +37,20 @@ object Notifier {
         post(ctx, 3, CH_RESULT, "Redeemed $n new code${if (n == 1) "" else "s"}", lines)
     }
 
-    fun workshopPoints(ctx: Context, gained: Int, total: Int) =
-        post(ctx, 4, CH_RESULT, "Machine Workshop: +$gained points", "You now have $total points.")
+    // Each game gets its own notification ids so one doesn't replace the other.
+    fun workshopPoints(ctx: Context, wg: WorkshopGame, gained: Int, total: Int) =
+        post(ctx, 10 + wg.ordinal * 2, CH_RESULT, "${wg.eventName}: +$gained points", "${wg.game.title}: you now have $total points.")
 
-    fun exchangeClaimed(ctx: Context, names: List<String>, codes: List<String>) {
+    fun exchangeClaimed(ctx: Context, wg: WorkshopGame, names: List<String>, codes: List<String>) {
         val n = names.size
-        val text = (names + codes).joinToString("\n")
-        post(ctx, 5, CH_RESULT, "Exchanged $n reward${if (n == 1) "" else "s"}", text)
+        val text = (listOf(wg.game.title) + names + codes).joinToString("\n")
+        post(ctx, 11 + wg.ordinal * 2, CH_RESULT, "Exchanged $n reward${if (n == 1) "" else "s"}", text)
+    }
+
+    fun prizeDraw(ctx: Context, wg: WorkshopGame, prizes: List<String>, codes: List<String>) {
+        val n = prizes.size
+        val text = (listOf(wg.game.title) + prizes + codes).joinToString("\n")
+        post(ctx, 20 + wg.ordinal, CH_RESULT, "Prize draw: $n draw${if (n == 1) "" else "s"}", text)
     }
 
     fun alert(ctx: Context, title: String, text: String) = post(ctx, 2, CH_ALERT, title, text)

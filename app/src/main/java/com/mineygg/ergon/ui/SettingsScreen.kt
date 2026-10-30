@@ -21,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,14 +35,19 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mineygg.ergon.AppInfo
 import com.mineygg.ergon.MainViewModel
 import com.mineygg.ergon.R
+import com.mineygg.ergon.core.Battery
 import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.Time
 import com.mineygg.ergon.core.Updater
-import com.mineygg.ergon.data.ExchangeMode
+import com.mineygg.ergon.core.WorkshopGame
+import com.mineygg.ergon.data.Settings
 import com.mineygg.ergon.data.ThemeMode
 
 @Composable
@@ -50,7 +56,7 @@ fun SettingsScreen(
     pad: PaddingValues,
     onLogin: (Int) -> Unit,
     onLicense: () -> Unit,
-    onExchange: () -> Unit
+    onConfigure: (Game) -> Unit
 ) {
     val s by vm.settings.collectAsStateWithLifecycle()
     val creds by vm.creds.collectAsStateWithLifecycle()
@@ -101,46 +107,14 @@ fun SettingsScreen(
                     VSpace(2)
                     Text("Gift codes hourly", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                     VSpace(2)
-                    Text("Workshop and auto exchange around each game reset", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                    Text("Web events and auto exchange around each game reset", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                 }
                 HorizontalDivider(color = cs.outlineVariant)
                 ToggleRow("Notifications", "Daily summary and session alerts", s.notify) { on ->
                     vm.updateSettings { it.copy(notify = on) }
                 }
-            }
-        }
-
-        // ── Tasks ──
-        item {
-            AppCard {
-                SectionTitle("Tasks")
-                ToggleRow("Daily check-in", null, s.checkin) { on -> vm.updateSettings { it.copy(checkin = on) } }
                 HorizontalDivider(color = cs.outlineVariant)
-                ToggleRow("Auto-redeem gift codes", "Genshin, Star Rail and Zenless", s.autoRedeem) { on ->
-                    vm.updateSettings { it.copy(autoRedeem = on) }
-                }
-                HorizontalDivider(color = cs.outlineVariant)
-                ToggleRow("Machine Workshop", "Genshin web event", s.workshop) { on ->
-                    vm.updateSettings { it.copy(workshop = on) }
-                }
-                HorizontalDivider(color = cs.outlineVariant)
-                ToggleRow("Auto exchange", "Spend workshop points on rewards", s.autoExchange) { on ->
-                    vm.updateSettings { it.copy(autoExchange = on) }
-                }
-                if (s.autoExchange) {
-                    VSpace(4)
-                    OutlinedButton(
-                        onClick = onExchange,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp)
-                    ) { Text("Exchange priority") }
-                    VSpace(6)
-                    Text(
-                        exchangeSummary(s.exchangePriority.size, s.exchangeMode),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cs.onSurfaceVariant
-                    )
-                }
+                BatteryRow()
             }
         }
 
@@ -150,10 +124,14 @@ fun SettingsScreen(
                 SectionTitle("Games")
                 Game.entries.forEachIndexed { i, g ->
                     if (i > 0) HorizontalDivider(color = cs.outlineVariant)
-                    ToggleRow(g.title, null, g.id in s.enabledGames, dot = Color(g.color)) { on ->
-                        vm.updateSettings {
-                            it.copy(enabledGames = if (on) it.enabledGames + g.id else it.enabledGames - g.id)
+                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Dot(Color(g.color))
+                        HSpace(12)
+                        Column(Modifier.weight(1f)) {
+                            Text(g.title, style = MaterialTheme.typography.bodyLarge)
+                            Text(gameSummary(s, g), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                         }
+                        OutlinedButton(onClick = { onConfigure(g) }, shape = RoundedCornerShape(12.dp)) { Text("Configure") }
                     }
                 }
             }
@@ -258,9 +236,13 @@ fun SettingsScreen(
     }
 }
 
-private fun exchangeSummary(count: Int, mode: ExchangeMode): String {
-    val list = if (count == 0) "No priority set, only free rewards are claimed" else "$count in the priority list"
-    return list + " · " + if (mode == ExchangeMode.WAIT) "waits for points" else "claims what it can afford"
+private fun gameSummary(s: Settings, g: Game): String {
+    val on = listOfNotNull(
+        if (g.id in s.checkinGames) "Check-in" else null,
+        if (g.id in s.redeemGames) "Codes" else null,
+        WorkshopGame.entries.firstOrNull { it.game == g }?.takeIf { it.id in s.workshopGames }?.eventName
+    )
+    return if (on.isEmpty()) "Nothing enabled" else on.joinToString(" · ")
 }
 
 @Composable
@@ -275,8 +257,43 @@ private fun SectionTitle(text: String) {
     VSpace(6)
 }
 
+/** Shows whether Android lets the app run in the background freely, and opens the system prompt to allow it. */
 @Composable
-private fun ToggleRow(
+private fun BatteryRow() {
+    val context = LocalContext.current
+    val cs = MaterialTheme.colorScheme
+    var unrestricted by remember { mutableStateOf(Battery.isUnrestricted(context)) }
+    // The prompt is a system screen, so check again when the player comes back.
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) unrestricted = Battery.isUnrestricted(context)
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Unrestricted battery usage", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                if (unrestricted) {
+                    "Allowed. Scheduled runs happen on time while the app is closed."
+                } else {
+                    "Restricted. Android may delay or skip runs while the app is closed."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant
+            )
+        }
+        if (!unrestricted) {
+            HSpace(12)
+            OutlinedButton(onClick = { Battery.request(context) }, shape = RoundedCornerShape(12.dp)) { Text("Allow") }
+        }
+    }
+}
+
+@Composable
+internal fun ToggleRow(
     title: String,
     subtitle: String?,
     checked: Boolean,

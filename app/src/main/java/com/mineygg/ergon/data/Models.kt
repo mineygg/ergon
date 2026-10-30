@@ -1,6 +1,7 @@
 package com.mineygg.ergon.data
 
 import com.mineygg.ergon.core.Game
+import com.mineygg.ergon.core.WorkshopGame
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -12,22 +13,39 @@ enum class ExchangeMode {
     WAIT,
 
     /** Claim the first reward in the priority list that is affordable right now. */
-    AFFORDABLE
+    AFFORDABLE,
+
+    /** Claim nothing, only spend the points on prize draws. */
+    DRAW
 }
+
+/** Auto-exchange choices of one workshop game. */
+data class ExchangePrefs(
+    val auto: Boolean = false,
+    val mode: ExchangeMode = ExchangeMode.WAIT,
+    // Award ids, most wanted first.
+    val priority: List<Int> = emptyList(),
+    // Also draw when no reward in the priority list is left to claim (not used in DRAW mode, which always draws).
+    val drawWhenIdle: Boolean = false
+)
 
 data class Settings(
     val theme: ThemeMode = ThemeMode.DARK,
     val autoRun: Boolean = true,
-    val enabledGames: Set<String> = Game.entries.map { it.id }.toSet(),
-    val checkin: Boolean = true,
-    val autoRedeem: Boolean = true,
-    val workshop: Boolean = true,
-    val autoExchange: Boolean = false,
-    val exchangeMode: ExchangeMode = ExchangeMode.WAIT,
-    val exchangePriority: List<Int> = emptyList(), // award ids, most wanted first
+    // What Ergon does per game (game ids). Set from each game's Configure screen.
+    val checkinGames: Set<String> = Game.entries.map { it.id }.toSet(),
+    val redeemGames: Set<String> = Game.entries.filter { it.redeem != null }.map { it.id }.toSet(),
+    val workshopGames: Set<String> = WorkshopGame.entries.map { it.id }.toSet(),
+    val exchange: Map<String, ExchangePrefs> = emptyMap(), // game id -> prefs (missing = defaults)
     val notify: Boolean = true,
     val checkUpdates: Boolean = true
-)
+) {
+    fun exchangePrefs(g: WorkshopGame): ExchangePrefs = exchange[g.id] ?: ExchangePrefs()
+
+    /** Copy with [g]'s exchange prefs changed. */
+    fun withExchange(g: WorkshopGame, change: (ExchangePrefs) -> ExchangePrefs): Settings =
+        copy(exchange = exchange + (g.id to change(exchangePrefs(g))))
+}
 
 data class Credentials(
     val ltoken: String = "",

@@ -18,11 +18,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.mineygg.ergon.MainViewModel
+import com.mineygg.ergon.core.Game
+import com.mineygg.ergon.core.WorkshopGame
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Default.Home),
@@ -37,11 +40,17 @@ fun AppRoot(vm: MainViewModel) {
     var loginStep by rememberSaveable { mutableIntStateOf(1) }
 
     var showLicense by rememberSaveable { mutableStateOf(false) }
-    var showExchange by rememberSaveable { mutableStateOf(false) }
+    var exchangeGame by rememberSaveable { mutableStateOf<String?>(null) }
+    var configGame by rememberSaveable { mutableStateOf<String?>(null) }
 
+    // Keeps each screen's saved state (scroll position, toggles) while another screen is shown in its place,
+    // so switching tabs or opening a config screen doesn't reset it.
+    val stateHolder = rememberSaveableStateHolder()
+
+    BackHandler(enabled = configGame != null) { configGame = null }
     BackHandler(enabled = showLogin) { showLogin = false }
     BackHandler(enabled = showLicense) { showLicense = false }
-    BackHandler(enabled = showExchange) { showExchange = false }
+    BackHandler(enabled = exchangeGame != null) { exchangeGame = null }
 
     val openLogin: (Int) -> Unit = { step ->
         loginStep = step
@@ -53,8 +62,17 @@ fun AppRoot(vm: MainViewModel) {
         return
     }
 
-    if (showExchange) {
-        ExchangeScreen(vm, onClose = { showExchange = false })
+    val exchangeTarget = WorkshopGame.entries.firstOrNull { it.id == exchangeGame }
+    if (exchangeTarget != null) {
+        ExchangeScreen(vm, exchangeTarget, onClose = { exchangeGame = null })
+        return
+    }
+
+    val configTarget = Game.entries.firstOrNull { it.id == configGame }
+    if (configTarget != null) {
+        stateHolder.SaveableStateProvider("config") {
+            GameConfigScreen(vm, configTarget, onExchange = { exchangeGame = it.id }, onClose = { configGame = null })
+        }
         return
     }
 
@@ -87,10 +105,12 @@ fun AppRoot(vm: MainViewModel) {
             }
         }
     ) { pad ->
-        when (tab) {
-            Tab.Home -> HomeScreen(vm, pad, openLogin)
-            Tab.Activity -> ActivityScreen(vm, pad)
-            Tab.Settings -> SettingsScreen(vm, pad, openLogin, onLicense = { showLicense = true }, onExchange = { showExchange = true })
+        stateHolder.SaveableStateProvider(tab) {
+            when (tab) {
+                Tab.Home -> HomeScreen(vm, pad, openLogin)
+                Tab.Activity -> ActivityScreen(vm, pad)
+                Tab.Settings -> SettingsScreen(vm, pad, openLogin, onLicense = { showLicense = true }, onConfigure = { configGame = it.id })
+            }
         }
     }
 }

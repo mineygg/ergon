@@ -7,6 +7,7 @@ import androidx.security.crypto.MasterKey
 import com.mineygg.ergon.core.CheckinStatus
 import com.mineygg.ergon.core.Time
 import com.mineygg.ergon.core.UpdateInfo
+import com.mineygg.ergon.core.WorkshopGame
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +27,9 @@ class Store(ctx: Context) {
     private val _lastCodeCheck = MutableStateFlow(sp.getLong("last_code_check", 0L))
     private val _history = MutableStateFlow(RunRecord.listFromJson(sp.getString("history", null)))
     private val _disclaimerAccepted = MutableStateFlow(sp.getBoolean("disclaimer", false))
-    private val _workshopInfo = MutableStateFlow(WorkshopInfo.fromJson(sp.getString("workshop_info", null)))
+    private val _workshopInfo = MutableStateFlow(
+        WorkshopGame.entries.mapNotNull { g -> WorkshopInfo.fromJson(sp.getString(infoKey(g), null))?.let { g.id to it } }.toMap()
+    )
 
     val settings: StateFlow<Settings> = _settings.asStateFlow()
     val creds: StateFlow<Credentials> = _creds.asStateFlow()
@@ -35,7 +38,7 @@ class Store(ctx: Context) {
     val lastCodeCheck: StateFlow<Long> = _lastCodeCheck.asStateFlow()
     val history: StateFlow<List<RunRecord>> = _history.asStateFlow()
     val disclaimerAccepted: StateFlow<Boolean> = _disclaimerAccepted.asStateFlow()
-    val workshopInfo: StateFlow<WorkshopInfo?> = _workshopInfo.asStateFlow()
+    val workshopInfo: StateFlow<Map<String, WorkshopInfo>> = _workshopInfo.asStateFlow()
 
     val savedLog: List<String>
         get() = sp.getString("log", "").orEmpty().split('\n').filter { it.isNotBlank() }
@@ -47,36 +50,62 @@ class Store(ctx: Context) {
             theme = runCatching { ThemeMode.valueOf(sp.getString("theme", d.theme.name).orEmpty()) }
                 .getOrDefault(d.theme),
             autoRun = sp.getBoolean("autoRun", d.autoRun),
-            enabledGames = sp.getStringSet("games", null)?.toSet() ?: d.enabledGames,
-            checkin = sp.getBoolean("checkin", d.checkin),
-            autoRedeem = sp.getBoolean("autoRedeem", d.autoRedeem),
-            workshop = sp.getBoolean("workshop", d.workshop),
-            autoExchange = sp.getBoolean("autoExchange", d.autoExchange),
-            exchangeMode = runCatching { ExchangeMode.valueOf(sp.getString("exchangeMode", d.exchangeMode.name).orEmpty()) }
-                .getOrDefault(d.exchangeMode),
-            exchangePriority = sp.getString("exchangePriority", null).orEmpty()
-                .split(',').mapNotNull { it.trim().toIntOrNull() }.distinct(),
+            checkinGames = sp.getStringSet("checkinGames", null)?.toSet() ?: legacyGames("checkin", d.checkinGames),
+            redeemGames = sp.getStringSet("redeemGames", null)?.toSet() ?: legacyGames("autoRedeem", d.redeemGames),
+            workshopGames = sp.getStringSet("workshopGames", null)?.toSet() ?: legacyWorkshopGames(d),
+            exchange = WorkshopGame.entries.associate { g -> g.id to loadExchange(g) },
             notify = sp.getBoolean("notify", d.notify),
             checkUpdates = sp.getBoolean("checkUpdates", d.checkUpdates)
+        )
+    }
+
+    /**
+     * Before the per-game Configure screens there was one list of enabled games plus one global switch per task.
+     * A game keeps a task only if it was in that list and the task's switch was on.
+     */
+    private fun legacyGames(switchKey: String, all: Set<String>): Set<String> {
+        val enabled = sp.getStringSet("games", null)?.toSet() ?: return if (sp.getBoolean(switchKey, true)) all else emptySet()
+        return if (sp.getBoolean(switchKey, true)) all.intersect(enabled) else emptySet()
+    }
+
+    /** 1.1.x had one on/off switch for the Genshin workshop only. */
+    private fun legacyWorkshopGames(d: Settings): Set<String> =
+        if (sp.getBoolean("workshop", true)) legacyGames("workshop", d.workshopGames) else emptySet()
+
+    // Genshin keeps the key names of 1.1.x, the other games get a suffix.
+    private fun exKey(base: String, g: WorkshopGame) = if (g.legacy) base else "${base}_${g.id}"
+
+    private fun loadExchange(g: WorkshopGame): ExchangePrefs {
+        val d = ExchangePrefs()
+        return ExchangePrefs(
+            auto = sp.getBoolean(exKey("autoExchange", g), d.auto),
+            mode = runCatching { ExchangeMode.valueOf(sp.getString(exKey("exchangeMode", g), d.mode.name).orEmpty()) }
+                .getOrDefault(d.mode),
+            priority = sp.getString(exKey("exchangePriority", g), null).orEmpty()
+                .split(',').mapNotNull { it.trim().toIntOrNull() }.distinct(),
+            drawWhenIdle = sp.getBoolean(exKey("drawIdle", g), d.drawWhenIdle)
         )
     }
 
     fun updateSettings(transform: (Settings) -> Settings) {
         val n = transform(_settings.value)
         _settings.value = n
-        sp.edit()
+        val e = sp.edit()
             .putString("theme", n.theme.name)
             .putBoolean("autoRun", n.autoRun)
-            .putStringSet("games", HashSet(n.enabledGames))
-            .putBoolean("checkin", n.checkin)
-            .putBoolean("autoRedeem", n.autoRedeem)
-            .putBoolean("workshop", n.workshop)
-            .putBoolean("autoExchange", n.autoExchange)
-            .putString("exchangeMode", n.exchangeMode.name)
-            .putString("exchangePriority", n.exchangePriority.joinToString(","))
+            .putStringSet("checkinGames", HashSet(n.checkinGames))
+            .putStringSet("redeemGames", HashSet(n.redeemGames))
+            .putStringSet("workshopGames", HashSet(n.workshopGames))
             .putBoolean("notify", n.notify)
             .putBoolean("checkUpdates", n.checkUpdates)
-            .apply()
+        for (g in WorkshopGame.entries) {
+            val p = n.exchangePrefs(g)
+            e.putBoolean(exKey("autoExchange", g), p.auto)
+                .putString(exKey("exchangeMode", g), p.mode.name)
+                .putString(exKey("exchangePriority", g), p.priority.joinToString(","))
+                .putBoolean(exKey("drawIdle", g), p.drawWhenIdle)
+        }
+        e.apply()
     }
 
     // ── Credentials ─────────────────────────────────────────────────────────
@@ -201,24 +230,31 @@ class Store(ctx: Context) {
         sp.edit().putString("report_redeem", r.toJson()).apply()
     }
 
-    // ── Machine Workshop ────────────────────────────────────────────────────
-    fun saveWorkshopInfo(i: WorkshopInfo) {
-        _workshopInfo.value = i
-        sp.edit().putString("workshop_info", i.toJson()).apply()
+    // ── Machine Workshop / Traveling Mimo ───────────────────────────────────
+    private fun infoKey(g: WorkshopGame) = if (g.legacy) "workshop_info" else "workshop_info_${g.id}"
+
+    fun saveWorkshopInfo(g: WorkshopGame, i: WorkshopInfo) {
+        _workshopInfo.value = _workshopInfo.value + (g.id to i)
+        sp.edit().putString(infoKey(g), i.toJson()).apply()
     }
 
     fun workshopDone(key: String): Boolean = sp.getStringSet("ws_done", null)?.contains(key) == true
 
-    /** Replaces any older entry for the same task (older period or event version), so the sets stay small. */
+    /**
+     * Replaces any older entry for the same task (older period or event version) of the same game, so the sets
+     * stay small. Entries look like "game:version:task:timeType:period"; other games' entries are left alone.
+     * Entries without a game (written by 1.1.x) are dropped.
+     */
     private fun swapEntry(setKey: String, prefix: String, entry: String) {
-        val ver = prefix.substringBefore(':') + ":"
+        val scope = prefix.split(':').take(2).joinToString(":") + ":"
+        val game = prefix.substringBefore(':') + ":"
         val cur = HashSet(sp.getStringSet(setKey, null) ?: emptySet())
-        cur.removeAll { !it.startsWith(ver) || it.startsWith(prefix) }
+        cur.removeAll { it.firstOrNull()?.isDigit() == true || (it.startsWith(game) && !it.startsWith(scope)) || it.startsWith(prefix) }
         cur.add(entry)
         sp.edit().putStringSet(setKey, cur).apply()
     }
 
-    /** Task collected for this period. [prefix] is "version:task:timeType:". */
+    /** Task collected for this period. [prefix] is "game:version:task:timeType:". */
     fun setWorkshopDone(prefix: String, key: String) = swapEntry("ws_done", prefix, key)
 
     /** True if finish_task was already tried this period and the server said the player has to do it. */

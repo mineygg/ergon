@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108" role="img" aria-label="Ergon">
+  <title>Ergon</title>
+  <rect width="108" height="108" rx="24" fill="#0E0E12"/>
+  <g transform="translate(54 54) scale(1.5) translate(-54 -54)" fill="none" stroke-linecap="round">
+    <path d="M60.80,33.08 A22,22 0 0 1 75.52,58.57" stroke="#F2C265" stroke-width="9"/>
+    <path d="M68.72,70.35 A22,22 0 0 1 39.28,70.35" stroke="#A98BFF" stroke-width="9"/>
+    <path d="M32.48,58.57 A22,22 0 0 1 47.20,33.08" stroke="#6DB6FF" stroke-width="9"/>
+    <path d="M73.05,43 L54,54" stroke="#F2C265" stroke-width="8"/>
+    <circle cx="54" cy="54" r="7" fill="#F4F6FF" stroke="none"/>
+  </g>
+</svg>

@@ -29,7 +29,7 @@ class CheckinWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
 }
 
 /**
- * Machine Workshop runs. Community missions reset at 00:00 UTC+8 and game missions at 04:00 server time:
+ * Machine Workshop and Traveling Mimo runs (every enabled game, one after the other). Community missions reset at 00:00 UTC+8 and game missions at 04:00 server time:
  *  - after a reset (00:30 / 04:30): try every new task with the API
  *  - 15 min before a reset (23:45 / 03:45): mandatory claim of everything that is complete
  *  - every 6 hours: re-read the list and claim anything that became complete

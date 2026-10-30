@@ -46,6 +46,7 @@ import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.Live
 import com.mineygg.ergon.core.Task
 import com.mineygg.ergon.core.Time
+import com.mineygg.ergon.core.WorkshopGame
 import com.mineygg.ergon.data.Credentials
 import com.mineygg.ergon.data.RunReport
 import com.mineygg.ergon.data.Settings
@@ -80,7 +81,12 @@ fun HomeScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit) {
         item { Hero(settings, creds, checkin, active, live, onLogin) }
         item { CheckinCard(settings, creds, checkin, active, live, onRun = vm::runCheckin, onStop = vm::stop) }
         item { CodesCard(settings, creds, redeem, lastCheck, active, live, onRun = vm::runRedeem, onStop = vm::stop) }
-        item { WorkshopCard(settings, creds, workshop, active, status, onRun = vm::runWorkshop, onStop = vm::stop) }
+        for (wg in WorkshopGame.entries) {
+            if (wg.id !in settings.workshopGames) continue
+            item(key = "workshop_${wg.id}") {
+                WorkshopCard(wg, settings, creds, workshop[wg.id], active, live, status, onRun = { vm.runWorkshop(wg) }, onStop = vm::stop)
+            }
+        }
     }
 }
 
@@ -88,7 +94,7 @@ private fun isToday(ms: Long): Boolean =
     Instant.ofEpochMilli(ms).atZone(Time.CST).toLocalDate() == LocalDate.now(Time.CST)
 
 private fun doneToday(settings: Settings, report: RunReport?): Pair<Int, Int> {
-    val games = Game.entries.filter { it.id in settings.enabledGames }
+    val games = Game.entries.filter { it.id in settings.checkinGames }
     val fresh = report?.takeIf { isToday(it.timeMillis) }
     val done = games.count { g ->
         val st = fresh?.checkins?.get(g.id)
@@ -98,7 +104,7 @@ private fun doneToday(settings: Settings, report: RunReport?): Pair<Int, Int> {
 }
 
 private fun liveDone(settings: Settings, live: Live): Pair<Int, Int> {
-    val games = Game.entries.filter { it.id in settings.enabledGames }
+    val games = Game.entries.filter { it.id in settings.checkinGames }
     val done = games.count { g ->
         val st = live.statuses[g.id]
         st == CheckinStatus.SUCCESS.name || st == CheckinStatus.ALREADY.name
@@ -285,7 +291,7 @@ private fun CheckinCard(
         CardHeader("Daily check-in", "Automatic · ${Time.checkinLocalLabel()}", cs.primary)
         VSpace(10)
         Game.entries.forEach { g ->
-            val enabled = settings.checkin && g.id in settings.enabledGames
+            val enabled = g.id in settings.checkinGames
             val name = if (running) live.statuses[g.id] else fresh?.checkins?.get(g.id)
             val st = name?.let { runCatching { CheckinStatus.valueOf(it) }.getOrNull() }
             val current = running && live.game == g.id
@@ -302,7 +308,7 @@ private fun CheckinCard(
             }
         }
         VSpace(10)
-        val todo = Game.entries.filter { settings.checkin && it.id in settings.enabledGames }
+        val todo = Game.entries.filter { it.id in settings.checkinGames }
         val allDone = todo.isNotEmpty() &&
             todo.all { g ->
                 val st = fresh?.checkins?.get(g.id)
@@ -378,7 +384,7 @@ private fun CodesCard(
             }
         }
         VSpace(12)
-        RunButton("Check codes now", running, active == null && creds.hasLogin && settings.autoRedeem, onRun, onStop)
+        RunButton("Check codes now", running, active == null && creds.hasLogin && settings.redeemGames.isNotEmpty(), onRun, onStop)
         VSpace(8)
         Text(
             if (lastCheck > 0) {
@@ -394,21 +400,24 @@ private fun CodesCard(
 
 @Composable
 private fun WorkshopCard(
+    wg: WorkshopGame,
     settings: Settings,
     creds: Credentials,
     info: WorkshopInfo?,
     active: Task?,
+    live: Live,
     status: String,
     onRun: () -> Unit,
     onStop: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
     val extra = LocalExtra.current
-    val running = active == Task.WORKSHOP
+    // One run handles every game in turn, so only the card of the game being processed shows progress.
+    val running = active == Task.WORKSHOP && live.game == wg.id
     val daysLeft = info?.let { ((it.endTime * 1000 - System.currentTimeMillis()) / 86_400_000L).coerceAtLeast(0) }
 
     AppCard {
-        CardHeader("Machine Workshop", "Genshin web event", cs.tertiary)
+        CardHeader(wg.eventName, "${wg.game.title} web event", Color(wg.game.color))
         VSpace(12)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatTile(info?.points?.toString() ?: "—", "Points", extra.success, Modifier.weight(1f))
@@ -421,7 +430,7 @@ private fun WorkshopCard(
                 if (info.exchange) Pill("Exchange open", cs.secondary)
             }
         }
-        if (settings.autoExchange) {
+        if (settings.exchangePrefs(wg).auto) {
             VSpace(8)
             Pill("Auto exchange on", extra.success)
         }
@@ -439,6 +448,6 @@ private fun WorkshopCard(
             }
         }
         VSpace(12)
-        RunButton("Collect now", running, active == null && creds.hasHoyolab && settings.workshop, onRun, onStop)
+        RunButton("Collect now", running, active == null && creds.hasHoyolab && wg.id in settings.workshopGames, onRun, onStop)
     }
 }

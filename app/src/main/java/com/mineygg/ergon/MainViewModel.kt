@@ -9,6 +9,7 @@ import com.mineygg.ergon.core.RunBus
 import com.mineygg.ergon.core.Runner
 import com.mineygg.ergon.core.Updater
 import com.mineygg.ergon.core.WorkshopApi
+import com.mineygg.ergon.core.WorkshopGame
 import com.mineygg.ergon.data.Settings
 import com.mineygg.ergon.work.Scheduler
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,14 +75,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Forced: also retries tasks that were marked as needing the player (completed ones are never redone). */
-    fun runWorkshop() {
+    fun runWorkshop(game: WorkshopGame) {
         if (RunBus.running.value) return
         val app = getApplication<Application>()
-        viewModelScope.launch { Runner(app, store).runWorkshop("manual", force = true) }
+        viewModelScope.launch { Runner(app, store).runWorkshop("manual", force = true, only = game) }
     }
 
     /** Reads the exchange shop (read-only, so it doesn't need the run lock) for the priority menu. */
-    fun loadShop() {
+    fun loadShop(game: WorkshopGame) {
         val cr = store.creds.value
         if (!cr.hasHoyolab || cr.hoyolabExpired) {
             _shop.value = ShopState.Failed("Sign in with HoYoLAB first.")
@@ -89,13 +90,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         _shop.value = ShopState.Loading
         viewModelScope.launch {
-            val (indexRes, act) = WorkshopApi.index(cr)
+            val (indexRes, act) = WorkshopApi.index(cr, game)
             if (act == null) {
                 _shop.value = ShopState.Failed(
                     when {
                         indexRes.network -> "Network error. Check your connection and try again."
                         indexRes.retcode == -100 -> "Your HoYoLAB session expired. Sign in again."
-                        indexRes.retcode == 0 -> "There is no active Machine Workshop event right now."
+                        indexRes.retcode == 0 -> "There is no active ${game.eventName} event right now."
                         else -> "Couldn't load the event [${indexRes.retcode}] ${indexRes.message}"
                     }
                 )

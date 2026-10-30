@@ -23,15 +23,15 @@ object Time {
         else -> "once"
     }
 
-    /** Genshin's own daily/weekly reset is 04:00 server time (UTC+8 on the Asia server). */
+    /** Genshin, Star Rail and Zenless reset their in-game dailies/weeklies at 04:00 server time (UTC+8 on the Asia server). */
     const val GAME_RESET_HOUR = 4
 
     /**
-     * Key for a Machine Workshop task's current period. Per the event rules, community missions refresh
-     * at 00:00 UTC+8 (weekly: Monday) and game missions (type 6) at 04:00 server time (weekly: Monday).
+     * Key for a workshop / Traveling Mimo task's current period. Per the event rules, community missions refresh
+     * at 00:00 UTC+8 (weekly: Monday) and in-game missions ([gameTask]) at 04:00 server time (weekly: Monday).
      */
-    fun workshopPeriodKey(timeType: Int, taskType: Int, now: ZonedDateTime = ZonedDateTime.now(CST)): String {
-        val d = (if (taskType == 6) now.minusHours(GAME_RESET_HOUR.toLong()) else now).toLocalDate()
+    fun workshopPeriodKey(timeType: Int, gameTask: Boolean, now: ZonedDateTime = ZonedDateTime.now(CST)): String {
+        val d = (if (gameTask) now.minusHours(GAME_RESET_HOUR.toLong()) else now).toLocalDate()
         return when (timeType) {
             1 -> d.toString()
             2 -> d.with(java.time.DayOfWeek.MONDAY).toString()

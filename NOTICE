@@ -14,5 +14,13 @@ Additional terms under section 7 of the GNU GPL v3:
   Origin (section 7(c)): modified versions must be clearly marked as modified and must not be presented
   as the original Ergon.
 
+  Name, icon and identifiers (section 7(e)): the name "Ergon", the app icon (assets/icon.svg and the
+  launcher icon files under app/src/main/res), the name "mineygg", and the application ID and package
+  names "com.mineygg.ergon" (the applicationId, the namespace and the source packages) are not licensed
+  under the GPL, and no trademark rights are granted for them. Modified versions and forks must remove
+  them and use their own name, icon, application ID and package names, and must not use them to suggest
+  that the work comes from, or is endorsed by, the original author. The copyright notice and the link to
+  the original project required above must stay.
+
 Everything else is governed by the GPL v3. Third-party components used by the app are listed in
 app/src/main/res/raw/notices.txt.

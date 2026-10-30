@@ -3,6 +3,7 @@ package com.mineygg.ergon.core
 import android.content.Context
 import com.mineygg.ergon.data.Credentials
 import com.mineygg.ergon.data.ExchangeMode
+import com.mineygg.ergon.data.ExchangePrefs
 import com.mineygg.ergon.data.ItemState
 import com.mineygg.ergon.data.RecordItem
 import com.mineygg.ergon.data.RedeemEntry
@@ -35,8 +36,6 @@ class Runner(private val ctx: Context, private val store: Store) {
         private const val BETWEEN_GAME_MS = 8_000L
         private const val RATE_LIMIT_WAIT_MS = 30_000L
 
-        /** Minimum gap between two Machine Workshop claim requests (finish_task, receive_point, exchange). */
-        private const val MIN_CLAIM_GAP_MS = 5_000L
         private const val FULL_PASS_MS = 6L * 60 * 60 * 1000
 
         /** cookie_token expires after ~2 days idle, so make sure a redeem request goes out at least this often. */
@@ -50,9 +49,12 @@ class Runner(private val ctx: Context, private val store: Store) {
     suspend fun runRedeem(trigger: String, force: Boolean): RunReport? =
         guarded(Task.REDEEM, trigger) { redeem(trigger, force) }
 
-    /** [finalCall] = the mandatory run 15 min before a reset: claims everything that is complete. */
-    suspend fun runWorkshop(trigger: String, force: Boolean, finalCall: Boolean = false): RunReport? =
-        guarded(Task.WORKSHOP, trigger) { workshop(trigger, force, finalCall) }
+    /**
+     * [finalCall] = the mandatory run 15 min before a reset: claims everything that is complete.
+     * [only] limits the run to one game (the buttons on the Home cards); null runs every enabled game, one after the other.
+     */
+    suspend fun runWorkshop(trigger: String, force: Boolean, finalCall: Boolean = false, only: WorkshopGame? = null): RunReport? =
+        guarded(Task.WORKSHOP, trigger) { workshop(trigger, force, finalCall, only) }
 
     private suspend fun guarded(task: Task, trigger: String, block: suspend () -> RunReport?): RunReport? {
         if (!lock.tryLock()) return null
@@ -77,8 +79,8 @@ class Runner(private val ctx: Context, private val store: Store) {
     private suspend fun checkin(trigger: String): RunReport? {
         val s = store.settings.value
         val cr = store.creds.value
-        if (!s.checkin) {
-            RunBus.log("Check-in is turned off in settings.")
+        if (s.checkinGames.isEmpty()) {
+            RunBus.log("Check-in is turned off for every game.")
             return null
         }
         if (!cr.hasHoyolab) {
@@ -96,7 +98,7 @@ class Runner(private val ctx: Context, private val store: Store) {
         var hoyolabCalls = 0
 
         for (g in Game.entries) {
-            if (g.id !in s.enabledGames) continue
+            if (g.id !in s.checkinGames) continue
 
             val prior = store.checkinToday(g.id)
             // Never ask the server again for a game that is already done today.
@@ -181,8 +183,8 @@ class Runner(private val ctx: Context, private val store: Store) {
     private suspend fun redeem(trigger: String, force: Boolean): RunReport? {
         val s = store.settings.value
         val cr = store.creds.value
-        if (!s.autoRedeem) {
-            RunBus.log("Auto-redeem is turned off in settings.")
+        if (s.redeemGames.isEmpty()) {
+            RunBus.log("Auto-redeem is turned off for every game.")
             return null
         }
         if (!cr.hasHoyolab) {
@@ -211,7 +213,7 @@ class Runner(private val ctx: Context, private val store: Store) {
         var redeemCalls = 0
         var aborted = false
 
-        val games = Game.entries.filter { it.redeem != null && it.id in s.enabledGames }
+        val games = Game.entries.filter { it.redeem != null && it.id in s.redeemGames }
         outer@ for ((gi, game) in games.withIndex()) {
             val rc = game.redeem!!
             RunBus.liveGame(game.id)
@@ -414,7 +416,9 @@ class Runner(private val ctx: Context, private val store: Store) {
         return null
     }
 
-    // ── Machine Workshop (Genshin web event on HoYoLAB) ─────────────────────
+    // ── Machine Workshop (Genshin) and Traveling Mimo (Star Rail, Zenless) ───
+    // All three are the same kind of HoYoLAB event and run through the same code, one game after the other,
+    // sharing one claim pacer so that no two claim requests (of any game) are closer than 5 seconds.
     // Per task, every run:
     //  - status 3 = already claimed on the server: never touched again.
     //  - completion is judged by progress: progress >= total but status not 3 means complete and unclaimed,
@@ -422,18 +426,14 @@ class Runner(private val ctx: Context, private val store: Store) {
     //  - otherwise try finish_task once per period. If the server accepts it, claim; if it refuses, the
     //    player has to do it: remember that for the period and just watch its progress from then on.
     // Runs: 30 min after each reset, 15 min before each reset (mandatory claim), and every 6 hours.
-    // After the tasks, if auto-exchange is on, the exchange shop is read once and rewards are claimed
+    // After the tasks, if the game's auto-exchange is on, its exchange shop is read once and rewards are claimed
     // (see autoExchange). There is no timer of its own: timed rewards are only looked at on these runs.
-    // Every claim request is at least MIN_CLAIM_GAP_MS after the previous one.
-    private suspend fun workshop(trigger: String, force: Boolean, finalCall: Boolean): RunReport? {
+    private suspend fun workshop(trigger: String, force: Boolean, finalCall: Boolean, only: WorkshopGame?): RunReport? {
         val s = store.settings.value
         val cr = store.creds.value
-        if (!s.workshop) {
-            RunBus.log("Machine Workshop is turned off in settings.")
-            return null
-        }
-        if ("genshin" !in s.enabledGames) {
-            RunBus.log("Genshin is turned off, skipping the Machine Workshop.")
+        val games = WorkshopGame.entries.filter { (only == null || it == only) && it.id in s.workshopGames }
+        if (games.isEmpty()) {
+            RunBus.log("Machine Workshop and Traveling Mimo are turned off in settings.")
             return null
         }
         if (!cr.hasHoyolab) {
@@ -446,58 +446,70 @@ class Runner(private val ctx: Context, private val store: Store) {
         }
 
         if (finalCall) RunBus.log("Final call: a reset is 15 min away, claiming everything that is complete")
-        RunBus.step("Machine Workshop: loading the event")
-        val (indexRes, act) = WorkshopApi.index(cr)
+        for (wg in games) {
+            RunBus.liveGame(wg.id)
+            val expired = workshopGame(wg, cr, s, trigger, force)
+            if (expired) break
+        }
+        RunBus.liveGame(null)
+        return RunReport(System.currentTimeMillis(), trigger, emptyMap(), 0, 0, 0, emptyList())
+    }
+
+    /** One game's event. Returns true if the HoYoLAB session turned out to be expired (so the other games are skipped). */
+    private suspend fun workshopGame(wg: WorkshopGame, cr: Credentials, s: Settings, trigger: String, force: Boolean): Boolean {
+        val label = wg.label
+        RunBus.step("$label: loading the event")
+        val (indexRes, act) = WorkshopApi.index(cr, wg)
         if (act == null) {
             when {
-                indexRes.network -> RunBus.log("✖ Machine Workshop: network error (${indexRes.message})")
+                indexRes.network -> RunBus.log("✖ $label: network error (${indexRes.message})")
                 indexRes.retcode == -100 -> {
                     store.setHealth(hoyolabExpired = true)
-                    RunBus.log("✖ Machine Workshop: session expired")
+                    RunBus.log("✖ $label: session expired")
+                    return true
                 }
-                indexRes.retcode == 0 -> RunBus.log("• Machine Workshop: no active event right now")
-                else -> RunBus.log("✖ Machine Workshop: [${indexRes.retcode}] ${indexRes.message}")
+                indexRes.retcode == 0 -> RunBus.log("• $label: no active event right now")
+                else -> RunBus.log("✖ $label: [${indexRes.retcode}] ${indexRes.message}")
             }
-            return null
+            return false
         }
         val nowSec = System.currentTimeMillis() / 1000
         if (act.end in 1 until nowSec) {
-            RunBus.log("• Machine Workshop: the event has ended")
-            return null
+            RunBus.log("• $label: the event has ended")
+            return false
         }
         if (!act.bound) {
-            RunBus.log("⚠ Machine Workshop: no Genshin account is linked to your HoYoLAB")
-            return null
+            RunBus.log("⚠ $label: no ${wg.game.title} account is linked to your HoYoLAB")
+            return false
         }
-        RunBus.log("Machine Workshop v${act.versionId}: ${act.points} points so far")
-        store.saveWorkshopInfo(WorkshopInfo(act.versionId, act.points, act.end, act.lottery, act.exchange, System.currentTimeMillis()))
+        RunBus.log("$label v${act.versionId}: ${act.points} points so far")
+        saveInfo(wg, act)
 
         val (taskRes, tasks) = WorkshopApi.tasks(cr, act)
         if (taskRes.retcode != 0) {
-            RunBus.log("✖ Machine Workshop: couldn't load tasks [${taskRes.retcode}] ${taskRes.message}")
-            return null
+            RunBus.log("✖ $label: couldn't load tasks [${taskRes.retcode}] ${taskRes.message}")
+            return false
         }
 
         val items = ArrayList<RecordItem>()
-        val pacer = ClaimPacer()
         var attempted = 0
         var needYou = 0
         var sessionExpired = false
 
         for (t in tasks) {
-            val prefix = "${act.versionId}:${t.id}:${t.timeType}:"
-            val key = prefix + Time.workshopPeriodKey(t.timeType, t.type)
+            val prefix = "${wg.id}:${act.versionId}:${t.id}:${t.timeType}:"
+            val key = prefix + Time.workshopPeriodKey(t.timeType, wg.isGameTask(t.type))
 
             // Status 3 = already claimed on the server. Never touch the task again.
             if (t.status == WorkshopTask.STATUS_CLAIMED) {
                 store.setWorkshopDone(prefix, key)
                 RunBus.log("• ${t.name}: already claimed")
-                items.add(RecordItem("genshin", t.name, "Claimed", ItemState.INFO))
+                items.add(RecordItem(wg.id, t.name, "Claimed", ItemState.INFO))
                 continue
             }
             if (!force && store.workshopDone(key)) {
                 RunBus.log("• ${t.name}: already collected")
-                items.add(RecordItem("genshin", t.name, "Already collected", ItemState.INFO))
+                items.add(RecordItem(wg.id, t.name, "Already collected", ItemState.INFO))
                 continue
             }
 
@@ -505,19 +517,19 @@ class Runner(private val ctx: Context, private val store: Store) {
             if (!complete && !force && store.workshopNeedsYou(key)) {
                 // Player has to do it. We only watch its progress (${t.progress}/${t.total}).
                 RunBus.log("• ${t.name}: needs you (${t.progress}/${t.total})")
-                items.add(RecordItem("genshin", t.name, "Needs you · ${t.progress}/${t.total}", ItemState.INFO))
+                items.add(RecordItem(wg.id, t.name, "Needs you · ${t.progress}/${t.total}", ItemState.INFO))
                 needYou++
                 continue
             }
             attempted++
-            RunBus.step("Machine Workshop: ${t.name}")
+            RunBus.step("$label: ${t.name}")
 
             if (!complete) {
                 if (t.readSeconds > 0) {
                     RunBus.liveDetail("${t.name} · waiting ${t.readSeconds}s")
                     delay((t.readSeconds + 2) * 1000L)
                 }
-                pacer.pace()
+                ClaimPacer.pace()
                 val f = WorkshopApi.finish(cr, act, t.id)
                 RunBus.log("  finish_task #${t.id}: [${f.retcode}] ${f.message}")
                 if (f.retcode == -100) {
@@ -525,7 +537,7 @@ class Runner(private val ctx: Context, private val store: Store) {
                     break
                 }
                 if (f.network) {
-                    items.add(RecordItem("genshin", t.name, "Network error, will try next run", ItemState.WARN))
+                    items.add(RecordItem(wg.id, t.name, "Network error, will try next run", ItemState.WARN))
                     continue
                 }
                 if (f.retcode != 0) {
@@ -533,82 +545,104 @@ class Runner(private val ctx: Context, private val store: Store) {
                     store.setWorkshopNeedsYou(prefix, key)
                     needYou++
                     val why = f.message.ifEmpty { "error ${f.retcode}" }
-                    items.add(RecordItem("genshin", t.name, "Needs you · ${t.progress}/${t.total} · $why", ItemState.INFO))
+                    items.add(RecordItem(wg.id, t.name, "Needs you · ${t.progress}/${t.total} · $why", ItemState.INFO))
                     continue
                 }
             }
 
-            pacer.pace()
+            ClaimPacer.pace()
             val r = WorkshopApi.receive(cr, act, t.id)
             RunBus.log("  receive_point #${t.id}: [${r.retcode}] ${r.message}")
             when {
                 r.retcode == 0 -> {
                     store.setWorkshopDone(prefix, key)
                     RunBus.log("  ✔ ${t.name}: +${t.points} points")
-                    items.add(RecordItem("genshin", t.name, "+${t.points} points", ItemState.OK))
+                    items.add(RecordItem(wg.id, t.name, "+${t.points} points", ItemState.OK))
                 }
                 r.retcode == -100 -> {
                     sessionExpired = true
                     break
                 }
-                r.network -> items.add(RecordItem("genshin", t.name, "Network error, will try next run", ItemState.WARN))
+                r.network -> items.add(RecordItem(wg.id, t.name, "Network error, will try next run", ItemState.WARN))
                 !complete -> {
                     // finish_task was accepted but the task still isn't complete: the player has to do it.
                     store.setWorkshopNeedsYou(prefix, key)
                     needYou++
                     val why = r.message.ifEmpty { "error ${r.retcode}" }
-                    items.add(RecordItem("genshin", t.name, "Needs you · ${t.progress}/${t.total} · $why", ItemState.INFO))
+                    items.add(RecordItem(wg.id, t.name, "Needs you · ${t.progress}/${t.total} · $why", ItemState.INFO))
                 }
                 else -> {
                     val why = r.message.ifEmpty { "error ${r.retcode}" }
-                    items.add(RecordItem("genshin", t.name, "Points not claimed: $why", ItemState.WARN))
+                    items.add(RecordItem(wg.id, t.name, "Points not claimed: $why", ItemState.WARN))
                 }
             }
         }
 
         if (sessionExpired) {
             store.setHealth(hoyolabExpired = true)
-            RunBus.log("✖ Machine Workshop: session expired")
+            RunBus.log("✖ $label: session expired")
             Notifier.alert(ctx, "Session expired", "Open Ergon and log in again to keep collecting.")
         }
 
         // Read the new total from the server (only if something was actually attempted).
         var total = act.points
         if (attempted > 0) {
-            val (_, after) = WorkshopApi.index(cr)
+            val (_, after) = WorkshopApi.index(cr, wg)
             if (after != null) {
                 total = after.points
-                store.saveWorkshopInfo(WorkshopInfo(after.versionId, after.points, after.end, after.lottery, after.exchange, System.currentTimeMillis()))
+                saveInfo(wg, after)
             }
         }
         val gained = total - act.points
 
         // Spend points last, so what was just earned counts.
+        val prefs = s.exchangePrefs(wg)
         var ex = ExchangeRun()
-        if (s.autoExchange && !sessionExpired) {
-            if (act.exchange) {
-                ex = autoExchange(cr, act, total, s, pacer, items)
-                if (ex.expired) {
-                    store.setHealth(hoyolabExpired = true)
-                    RunBus.log("✖ Machine Workshop: session expired")
-                    Notifier.alert(ctx, "Session expired", "Open Ergon and log in again to keep collecting.")
-                }
-                if (ex.claimed > 0) {
-                    val (_, after) = WorkshopApi.index(cr)
-                    if (after != null) {
-                        total = after.points
-                        store.saveWorkshopInfo(WorkshopInfo(after.versionId, after.points, after.end, after.lottery, after.exchange, System.currentTimeMillis()))
-                    } else {
-                        total -= ex.spent
+        var dr = DrawRun()
+        if (prefs.auto && !sessionExpired) {
+            // DRAW mode claims nothing: the points only go into prize draws.
+            val drawOnly = wg.canDraw && prefs.mode == ExchangeMode.DRAW
+            if (!drawOnly) {
+                if (act.exchange) {
+                    ex = autoExchange(wg, cr, act, total, prefs, items)
+                    if (ex.expired) {
+                        store.setHealth(hoyolabExpired = true)
+                        RunBus.log("✖ $label: session expired")
+                        Notifier.alert(ctx, "Session expired", "Open Ergon and log in again to keep collecting.")
                     }
+                } else {
+                    RunBus.log("• Auto exchange: the exchange isn't open right now")
                 }
-            } else {
-                RunBus.log("• Auto exchange: the exchange isn't open right now")
+            }
+            val wantDraw = wg.canDraw && !ex.expired && (drawOnly || (prefs.drawWhenIdle && ex.idle))
+            if (wantDraw) {
+                if (act.lottery) {
+                    dr = autoDraw(wg, cr, act, items)
+                    if (dr.expired) {
+                        store.setHealth(hoyolabExpired = true)
+                        RunBus.log("✖ $label: session expired")
+                        Notifier.alert(ctx, "Session expired", "Open Ergon and log in again to keep collecting.")
+                    }
+                } else {
+                    RunBus.log("• Prize draw: the draw isn't open right now")
+                }
+            } else if (wg.canDraw && prefs.drawWhenIdle && !ex.idle && !ex.expired) {
+                RunBus.log("• Prize draw: skipped, there is still a reward in the priority list to claim")
+            }
+            if (ex.claimed > 0 || dr.draws > 0) {
+                val (_, after) = WorkshopApi.index(cr, wg)
+                if (after != null) {
+                    total = after.points
+                    saveInfo(wg, after)
+                } else {
+                    total -= ex.spent + dr.spent
+                }
             }
         }
 
-        val didSomething = attempted > 0 || ex.claimed > 0
-        val spentText = if (ex.spent > 0) " · ${ex.spent} spent" else ""
+        val spent = ex.spent + dr.spent
+        val didSomething = attempted > 0 || ex.claimed > 0 || dr.draws > 0
+        val spentText = if (spent > 0) " · $spent spent" else ""
         RunBus.log(
             when {
                 !didSomething -> "Done. Nothing new to try."
@@ -618,38 +652,40 @@ class Runner(private val ctx: Context, private val store: Store) {
 
         val now = System.currentTimeMillis()
         if (didSomething || force) {
-            val exchangedText = if (ex.claimed > 0) " · ${ex.claimed} exchanged" else ""
+            val exchangedText = (if (ex.claimed > 0) " · ${ex.claimed} exchanged" else "") +
+                (if (dr.draws > 0) " · ${dr.draws} drawn" else "")
             val summary = when {
                 items.isEmpty() -> "No tasks found"
                 needYou > 0 -> "+$gained points$spentText$exchangedText · $total total · $needYou need you"
                 else -> "+$gained points$spentText$exchangedText · $total total"
             }
-            val ok = !sessionExpired && !ex.expired && items.none { it.state == ItemState.ERROR || it.state == ItemState.WARN }
-            store.addRecord(RunRecord(now, "WORKSHOP", trigger, summary, ok, items))
+            val ok = !sessionExpired && !ex.expired && !dr.expired && items.none { it.state == ItemState.ERROR || it.state == ItemState.WARN }
+            store.addRecord(RunRecord(now, wg.recordTask, trigger, summary, ok, items))
         }
-        if (gained > 0 && s.notify) Notifier.workshopPoints(ctx, gained, total)
-        if (ex.claimed > 0 && s.notify) Notifier.exchangeClaimed(ctx, ex.names, ex.codes)
-        return RunReport(now, trigger, emptyMap(), 0, 0, 0, emptyList())
+        if (gained > 0 && s.notify) Notifier.workshopPoints(ctx, wg, gained, total)
+        if (ex.claimed > 0 && s.notify) Notifier.exchangeClaimed(ctx, wg, ex.names, ex.codes)
+        if (dr.draws > 0 && s.notify) Notifier.prizeDraw(ctx, wg, dr.prizes, dr.codes)
+        return sessionExpired || ex.expired || dr.expired
     }
 
-    /** Spaces claim requests out: never two within [MIN_CLAIM_GAP_MS]. */
-    private class ClaimPacer {
-        private var last = 0L
-
-        suspend fun pace() {
-            if (last != 0L) {
-                val gap = MIN_CLAIM_GAP_MS - (System.nanoTime() - last) / 1_000_000L
-                if (gap > 0) delay(gap)
-            }
-            last = System.nanoTime()
-        }
-    }
+    private fun saveInfo(wg: WorkshopGame, a: WorkshopAct) =
+        store.saveWorkshopInfo(wg, WorkshopInfo(a.versionId, a.points, a.end, a.lottery, a.exchange, System.currentTimeMillis()))
 
     private data class ExchangeRun(
         val claimed: Int = 0,
         val spent: Int = 0,
         val expired: Boolean = false,
         val names: List<String> = emptyList(),
+        val codes: List<String> = emptyList(),
+        /** True when no reward of the priority list is left to claim, so spare points could go into a prize draw. */
+        val idle: Boolean = true
+    )
+
+    private data class DrawRun(
+        val draws: Int = 0,
+        val spent: Int = 0,
+        val expired: Boolean = false,
+        val prizes: List<String> = emptyList(),
         val codes: List<String> = emptyList()
     )
 
@@ -661,23 +697,25 @@ class Runner(private val ctx: Context, private val store: Store) {
      *     - affordable: claimed;
      *     - not affordable: WAIT stops here and keeps the points, AFFORDABLE moves on to the next reward.
      * Points are tracked locally between claims, so one run never overspends.
+     * If a reward comes as a redeem code, it is redeemed right away through the gift-code API (when the second
+     * sign-in step is done); otherwise the code is shown in the activity and the notification.
      */
     private suspend fun autoExchange(
+        wg: WorkshopGame,
         cr: Credentials,
         act: WorkshopAct,
         startPoints: Int,
-        s: Settings,
-        pacer: ClaimPacer,
+        prefs: ExchangePrefs,
         items: MutableList<RecordItem>
     ): ExchangeRun {
-        RunBus.step("Machine Workshop: exchange shop")
+        RunBus.step("${wg.label}: exchange shop")
         val (listRes, list) = WorkshopApi.exchangeList(cr, act)
         if (listRes.retcode == -100) return ExchangeRun(expired = true)
         if (listRes.retcode != 0) {
             val why = if (listRes.network) "network error" else "[${listRes.retcode}] ${listRes.message}"
             RunBus.log("✖ Auto exchange: couldn't load the shop ($why)")
-            items.add(RecordItem("genshin", "Exchange", "Couldn't load the shop, will try next run", ItemState.WARN))
-            return ExchangeRun()
+            items.add(RecordItem(wg.id, "Exchange", "Couldn't load the shop, will try next run", ItemState.WARN))
+            return ExchangeRun(idle = false)
         }
 
         var points = startPoints
@@ -686,33 +724,32 @@ class Runner(private val ctx: Context, private val store: Store) {
         var expired = false
         val names = ArrayList<String>()
         val codes = ArrayList<String>()
+        val claimedIds = HashSet<Int>()
 
         // Returns true if the request failed because of the network (so waiting on points makes no sense).
         suspend fun claim(a: ExchangeAward): Boolean {
-            RunBus.step("Machine Workshop: exchanging ${a.name}")
-            pacer.pace()
+            RunBus.step("${wg.label}: exchanging ${a.name}")
+            ClaimPacer.pace()
             val o = WorkshopApi.exchange(cr, act, a.id)
             val r = o.result
             RunBus.log("  exchange #${a.id}: [${r.retcode}] ${r.message}")
             when {
                 r.retcode == 0 -> {
                     claimed++
+                    claimedIds.add(a.id)
                     points -= a.cost
                     spent += a.cost
                     names.add(a.name)
                     items.add(
-                        RecordItem("genshin", "Exchanged: ${a.name}", if (a.cost == 0) "Free" else "-${a.cost} points", ItemState.OK)
+                        RecordItem(wg.id, "Exchanged: ${a.name}", if (a.cost == 0) "Free" else "-${a.cost} points", ItemState.OK)
                     )
-                    if (o.code.isNotEmpty()) {
-                        codes.add("${a.name}: ${o.code}")
-                        items.add(RecordItem("genshin", o.code, "Redeem code for ${a.name}", ItemState.OK, mono = true))
-                    }
+                    if (o.code.isNotEmpty()) redeemExchangeCode(wg, cr, o.code, a.name, items)?.let { codes.add(it) }
                 }
                 r.retcode == -100 -> expired = true
-                r.network -> items.add(RecordItem("genshin", a.name, "Network error, will try next run", ItemState.WARN))
+                r.network -> items.add(RecordItem(wg.id, a.name, "Network error, will try next run", ItemState.WARN))
                 else -> {
                     val why = r.message.ifEmpty { "error ${r.retcode}" }
-                    items.add(RecordItem("genshin", a.name, "Not exchanged: $why", ItemState.WARN))
+                    items.add(RecordItem(wg.id, a.name, "Not exchanged: $why", ItemState.WARN))
                 }
             }
             return r.network
@@ -731,7 +768,7 @@ class Runner(private val ctx: Context, private val store: Store) {
 
         // 2. Priority list.
         val byId = list.associateBy { it.id }
-        for (id in s.exchangePriority) {
+        for (id in prefs.priority) {
             val a = byId[id] ?: continue
             if (a.status == ExchangeAward.STATUS_CLAIMED || a.cost == 0) continue
             if (!a.claimable) {
@@ -740,9 +777,9 @@ class Runner(private val ctx: Context, private val store: Store) {
             }
             if (points < a.cost) {
                 val missing = a.cost - points
-                if (s.exchangeMode == ExchangeMode.WAIT) {
+                if (prefs.mode == ExchangeMode.WAIT) {
                     RunBus.log("• Waiting for ${a.name}: $missing more points needed ($points/${a.cost})")
-                    items.add(RecordItem("genshin", a.name, "Waiting for $missing more points · $points/${a.cost}", ItemState.INFO))
+                    items.add(RecordItem(wg.id, a.name, "Waiting for $missing more points · $points/${a.cost}", ItemState.INFO))
                     break
                 }
                 RunBus.log("• ${a.name}: costs ${a.cost}, have $points, moving on")
@@ -750,8 +787,134 @@ class Runner(private val ctx: Context, private val store: Store) {
             }
             val network = claim(a)
             if (expired) break
-            if (network && s.exchangeMode == ExchangeMode.WAIT) break
+            if (network && prefs.mode == ExchangeMode.WAIT) break
         }
-        return ExchangeRun(claimed, spent, expired, names, codes)
+        // Something in the list that can be claimed but wasn't (too expensive for now) means we are saving for it.
+        val pending = list.any {
+            it.id in prefs.priority && it.cost > 0 && it.status != ExchangeAward.STATUS_CLAIMED && it.claimable && it.id !in claimedIds
+        }
+        return ExchangeRun(claimed, spent, expired, names, codes, idle = !pending && !expired)
+    }
+
+    /**
+     * Prize draw: as many draws as the points and the draw limit allow, each one 5 seconds after the last request.
+     * A prize that comes as a redeem code is redeemed right away, like an exchange code.
+     */
+    private suspend fun autoDraw(wg: WorkshopGame, cr: Credentials, act: WorkshopAct, items: MutableList<RecordItem>): DrawRun {
+        RunBus.step("${wg.label}: prize draw")
+        val (infoRes, info) = WorkshopApi.lotteryInfo(cr, act)
+        if (infoRes.retcode == -100) return DrawRun(expired = true)
+        if (info == null) {
+            val why = if (infoRes.network) "network error" else "[${infoRes.retcode}] ${infoRes.message}"
+            RunBus.log("✖ Prize draw: couldn't load it ($why)")
+            items.add(RecordItem(wg.id, "Prize draw", "Couldn't load the draw, will try next run", ItemState.WARN))
+            return DrawRun()
+        }
+        val n = info.affordable
+        if (n <= 0) {
+            RunBus.log("• Prize draw: nothing to draw (${info.point} points, ${info.cost} per draw, ${info.count}/${info.limit} used)")
+            return DrawRun()
+        }
+
+        RunBus.log("Prize draw: ${info.count}/${info.limit} draws used today, $n to make")
+        var draws = 0
+        var spent = 0
+        var expired = false
+        val prizes = ArrayList<String>()
+        val codes = ArrayList<String>()
+        for (i in 1..n) {
+            RunBus.step("${wg.label}: prize draw $i of $n")
+            ClaimPacer.pace()
+            val o = WorkshopApi.draw(cr, act)
+            val r = o.result
+            RunBus.log("  draw $i: [${r.retcode}] ${r.message}")
+            when {
+                r.retcode == 0 -> {
+                    draws++
+                    spent += info.cost
+                    prizes.add(o.name)
+                    items.add(RecordItem(wg.id, "Prize draw: ${o.name}", "-${info.cost} points", ItemState.OK))
+                    if (o.code.isNotEmpty()) redeemExchangeCode(wg, cr, o.code, o.name, items)?.let { codes.add(it) }
+                }
+                r.retcode == -100 -> {
+                    expired = true
+                    break
+                }
+                r.network -> {
+                    items.add(RecordItem(wg.id, "Prize draw", "Network error, will try next run", ItemState.WARN))
+                    break
+                }
+                else -> {
+                    val why = r.message.ifEmpty { "error ${r.retcode}" }
+                    items.add(RecordItem(wg.id, "Prize draw", "Not drawn: $why", ItemState.WARN))
+                    break
+                }
+            }
+        }
+        return DrawRun(draws, spent, expired, prizes, codes)
+    }
+
+    /**
+     * Redeems a code an exchange handed out, through the same gift-code API as the code pages.
+     * Returns null when it was redeemed, otherwise a "reward: code" line so the player can use it by hand.
+     */
+    private suspend fun redeemExchangeCode(
+        wg: WorkshopGame,
+        cr: Credentials,
+        code: String,
+        reward: String,
+        items: MutableList<RecordItem>
+    ): String? {
+        val game = wg.game
+        val manual = "$reward: $code"
+        fun keep(why: String): String {
+            RunBus.log("  ⚠ code $code not redeemed: $why")
+            items.add(RecordItem(wg.id, code, "Code for $reward · not redeemed: $why", ItemState.WARN, mono = true))
+            return manual
+        }
+
+        val rc = game.redeem ?: return keep("redeeming isn't supported for ${game.title}")
+        if (!cr.hasLogin || cr.loginExpired) return keep("finish the second sign-in step to redeem automatically")
+        val acc = HoyoApi.discover(rc.gameBiz, cr).firstOrNull() ?: return keep("no linked ${game.title} account found")
+
+        RunBus.step("${wg.label}: redeeming the code for $reward")
+        ClaimPacer.pace()
+        var res = HoyoApi.redeem(game, code, acc, cr)
+        if (res.rateLimited) {
+            RunBus.log("  ⚠ rate limited, waiting 30s")
+            delay(RATE_LIMIT_WAIT_MS)
+            ClaimPacer.pace()
+            res = HoyoApi.redeem(game, code, acc, cr)
+        }
+        if (!res.rateLimited && !res.networkError) store.setLastRedeemCall(System.currentTimeMillis())
+        return when {
+            res.success -> {
+                RunBus.log("  ✔ code $code redeemed for ${acc.nickname.ifEmpty { acc.uid }}")
+                items.add(RecordItem(wg.id, code, "Redeemed in game: $reward", ItemState.OK, mono = true))
+                null
+            }
+            res.tokenExpired -> {
+                store.setHealth(loginExpired = true)
+                keep("sign-in expired")
+            }
+            else -> keep(res.message)
+        }
+    }
+}
+
+/**
+ * Spaces claim requests out: never two within 5 seconds. One instance for everything, so it holds across
+ * games (a request for Star Rail never follows right behind one for Genshin) and across runs.
+ */
+private object ClaimPacer {
+    private const val MIN_GAP_MS = 5_000L
+    private var last = 0L
+
+    suspend fun pace() {
+        if (last != 0L) {
+            val gap = MIN_GAP_MS - (System.nanoTime() - last) / 1_000_000L
+            if (gap > 0) delay(gap)
+        }
+        last = System.nanoTime()
     }
 }

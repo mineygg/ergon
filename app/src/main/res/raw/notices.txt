@@ -7,7 +7,10 @@ Original project: https://github.com/mineygg/ergon
 Additional terms under section 7 of the GNU GPL v3: any copy, fork or modified version of this work, and
 any app built from it, must keep this copyright notice and the link to the original project, including in
 the legal notices shown to users. Modified versions must be marked as modified and must not be presented
-as the original Ergon.
+as the original Ergon. The name "Ergon", the app icon, the name "mineygg" and the application ID and
+package names com.mineygg.ergon are not licensed under the GPL: modified versions must remove them and use
+their own name, icon, application ID and package names. The copyright notice and the link to the original
+project must stay.
 
 Ergon for Android is free software released under the GNU General Public License v3.0
 (see "GNU GPL v3" tab).
