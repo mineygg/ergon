@@ -66,6 +66,8 @@ fun HomeScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit) {
     val workshop by vm.workshopInfo.collectAsStateWithLifecycle()
     val status by vm.status.collectAsStateWithLifecycle()
     val update by vm.updateState.collectAsStateWithLifecycle()
+    val online by vm.online.collectAsStateWithLifecycle()
+    val pending by vm.pending.collectAsStateWithLifecycle()
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -77,6 +79,7 @@ fun HomeScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit) {
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        if (!online || pending.isNotEmpty()) item { ConnectionBanner(online, pending) }
         if (settings.checkUpdates) item { UpdateBanner(update, onUpdate = vm::startUpdate) }
         item { Hero(settings, creds, checkin, active, live, onLogin) }
         item { CheckinCard(settings, creds, checkin, active, live, onRun = vm::runCheckin, onStop = vm::stop) }
@@ -86,6 +89,38 @@ fun HomeScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit) {
             item(key = "workshop_${wg.id}") {
                 WorkshopCard(wg, settings, creds, workshop[wg.id], active, live, status, onRun = { vm.runWorkshop(wg) }, onStop = vm::stop)
             }
+        }
+    }
+}
+
+/** Shown while offline, or while a run is waiting for the internet. Everything resumes by itself. */
+@Composable
+private fun ConnectionBanner(online: Boolean, pending: Set<String>) {
+    val cs = MaterialTheme.colorScheme
+    val names = listOfNotNull(
+        if ("CHECKIN" in pending) "check-in" else null,
+        if ("WORKSHOP" in pending) "web events" else null,
+        if ("REDEEM" in pending) "gift codes" else null
+    ).joinToString(", ")
+    val title = if (online) "Finishing what was interrupted" else "No internet connection"
+    val detail = when {
+        names.isNotEmpty() && online -> "Waiting to complete: $names."
+        names.isNotEmpty() -> "Waiting for the connection: $names. It continues by itself when you're back online."
+        else -> "Runs will wait for the connection and continue by themselves."
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(cs.errorContainer.copy(alpha = 0.6f))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(Icons.Default.Warning, contentDescription = null, tint = cs.onErrorContainer, modifier = Modifier.size(20.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = cs.onErrorContainer, fontWeight = FontWeight.SemiBold)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = cs.onErrorContainer)
         }
     }
 }

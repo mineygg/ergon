@@ -1,6 +1,7 @@
 package com.mineygg.ergon.core
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -18,11 +19,13 @@ import com.mineygg.ergon.data.RedeemEntry
 object Notifier {
     private const val CH_RESULT = "result"
     private const val CH_ALERT = "alert"
+    private const val CH_WORK = "work"
 
     fun createChannels(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH_RESULT, "Claims", NotificationManager.IMPORTANCE_DEFAULT))
         nm.createNotificationChannel(NotificationChannel(CH_ALERT, "Session alerts", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CH_WORK, "Background claims", NotificationManager.IMPORTANCE_LOW))
     }
 
     fun checkinClaimed(ctx: Context, games: List<String>) =
@@ -52,6 +55,14 @@ object Notifier {
         val text = (listOf(wg.game.title) + prizes + codes).joinToString("\n")
         post(ctx, 20 + wg.ordinal, CH_RESULT, "Prize draw: $n draw${if (n == 1) "" else "s"}", text)
     }
+
+    /** Only shown on Android 11 and older, which needs one while an alarm-started claim runs. */
+    fun working(ctx: Context): Notification =
+        NotificationCompat.Builder(ctx, CH_WORK)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle("Claiming a reward")
+            .setOngoing(true)
+            .build()
 
     fun alert(ctx: Context, title: String, text: String) = post(ctx, 2, CH_ALERT, title, text)
 

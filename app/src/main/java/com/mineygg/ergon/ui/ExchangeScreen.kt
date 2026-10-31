@@ -200,9 +200,9 @@ fun ExchangeScreen(vm: MainViewModel, game: WorkshopGame, onClose: () -> Unit) {
 
                         item {
                             Text(
-                                "Rewards you already own are hidden. Timed rewards show when they refresh and are only " +
-                                    "checked on the normal ${game.eventName} runs. Every claim is sent at least 5 seconds apart, " +
-                                    "across all games.",
+                                "Rewards you already own are hidden. Timed rewards show when they refresh. Their stock is first come, " +
+                                    "first served, so Ergon sets an alarm for the refresh and claims the moment they are back. " +
+                                    "Every claim is sent at least 5 seconds apart, across all games.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = cs.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 4.dp)

@@ -76,7 +76,7 @@ data class ExchangeAward(
     /** Can be claimed right now: available and not sitting on a refresh timer. */
     val claimable: Boolean get() = status == STATUS_AVAILABLE && nextRefresh == 0L
 
-    /** Timed reward that is on cooldown. Only looked at again on the next normal workshop run. */
+    /** Timed reward that is on cooldown. An alarm is set for its refresh so it can be claimed right away. */
     val timed: Boolean get() = nextRefresh != 0L
 
     companion object {

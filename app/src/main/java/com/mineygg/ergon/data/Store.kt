@@ -16,9 +16,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * All persistence. Tokens live in EncryptedSharedPreferences (Android Keystore backed);
  * settings, claimed-code history and reports live in regular preferences.
  */
-class Store(ctx: Context) {
+class Store(ctx: Context, private val secure: SharedPreferences = createSecure(ctx)) {
     private val sp: SharedPreferences = ctx.getSharedPreferences("claim_prefs", Context.MODE_PRIVATE)
-    private val secure: SharedPreferences = createSecure(ctx)
 
     private val _settings = MutableStateFlow(loadSettings())
     private val _creds = MutableStateFlow(loadCreds())
@@ -27,6 +26,7 @@ class Store(ctx: Context) {
     private val _lastCodeCheck = MutableStateFlow(sp.getLong("last_code_check", 0L))
     private val _history = MutableStateFlow(RunRecord.listFromJson(sp.getString("history", null)))
     private val _disclaimerAccepted = MutableStateFlow(sp.getBoolean("disclaimer", false))
+    private val _pending = MutableStateFlow(sp.getStringSet("pending_tasks", null)?.toSet() ?: emptySet())
     private val _workshopInfo = MutableStateFlow(
         WorkshopGame.entries.mapNotNull { g -> WorkshopInfo.fromJson(sp.getString(infoKey(g), null))?.let { g.id to it } }.toMap()
     )
@@ -39,6 +39,12 @@ class Store(ctx: Context) {
     val history: StateFlow<List<RunRecord>> = _history.asStateFlow()
     val disclaimerAccepted: StateFlow<Boolean> = _disclaimerAccepted.asStateFlow()
     val workshopInfo: StateFlow<Map<String, WorkshopInfo>> = _workshopInfo.asStateFlow()
+
+    /**
+     * Tasks (CHECKIN, REDEEM, WORKSHOP) whose last automatic run was cut short by the connection. Kept on disk,
+     * so they are picked up again when the internet is back, even after the app or the phone restarted.
+     */
+    val pending: StateFlow<Set<String>> = _pending.asStateFlow()
 
     val savedLog: List<String>
         get() = sp.getString("log", "").orEmpty().split('\n').filter { it.isNotBlank() }
@@ -163,6 +169,36 @@ class Store(ctx: Context) {
         sp.edit().putString("checkin:$gameId", "${Time.today()}|${status.name}").apply()
     }
 
+    // ── Work waiting for the internet ───────────────────────────────────────
+    fun addPending(task: String) {
+        if (task in _pending.value) return
+        _pending.value = _pending.value + task
+        sp.edit().putStringSet("pending_tasks", HashSet(_pending.value)).apply()
+    }
+
+    fun clearPending(task: String) {
+        if (task !in _pending.value) return
+        _pending.value = _pending.value - task
+        sp.edit().putStringSet("pending_tasks", HashSet(_pending.value)).apply()
+    }
+
+    /** When the check-in last sent a request (epoch ms), so a missed check-in is retried but not in a tight loop. */
+    val lastCheckinTry: Long get() = sp.getLong("last_checkin_try", 0L)
+
+    /** How many check-in runs sent requests today (HoYoLAB day). */
+    val checkinTriesToday: Int
+        get() {
+            val parts = sp.getString("checkin_tries", null)?.split("|") ?: return 0
+            return if (parts.size == 2 && parts[0] == Time.today()) parts[1].toIntOrNull() ?: 0 else 0
+        }
+
+    fun noteCheckinTry() {
+        sp.edit()
+            .putString("checkin_tries", "${Time.today()}|${checkinTriesToday + 1}")
+            .putLong("last_checkin_try", System.currentTimeMillis())
+            .apply()
+    }
+
     // ── Claimed-code history ────────────────────────────────────────────────
     fun isClaimed(key: String, code: String): Boolean =
         sp.getStringSet("claimed:$key", null)?.contains(code) == true
@@ -233,6 +269,11 @@ class Store(ctx: Context) {
     // ── Machine Workshop / Traveling Mimo ───────────────────────────────────
     private fun infoKey(g: WorkshopGame) = if (g.legacy) "workshop_info" else "workshop_info_${g.id}"
 
+    /** When the next alarm for a refreshing reward is set (epoch ms, 0 = none), so it can be set again after a reboot. */
+    fun refreshAt(g: WorkshopGame): Long = sp.getLong("refresh_at_${g.id}", 0L)
+
+    fun setRefreshAt(g: WorkshopGame, ms: Long) = sp.edit().putLong("refresh_at_${g.id}", ms).apply()
+
     fun saveWorkshopInfo(g: WorkshopGame, i: WorkshopInfo) {
         _workshopInfo.value = _workshopInfo.value + (g.id to i)
         sp.edit().putString(infoKey(g), i.toJson()).apply()
@@ -272,24 +313,25 @@ class Store(ctx: Context) {
     fun saveLog(lines: List<String>) {
         sp.edit().putString("log", lines.takeLast(400).joinToString("\n")).apply()
     }
+}
 
-    private fun createSecure(ctx: Context): SharedPreferences {
-        fun build(): SharedPreferences {
-            val key = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            return EncryptedSharedPreferences.create(
-                ctx,
-                "secure_creds",
-                key,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        }
-        return try {
-            build()
-        } catch (e: Exception) {
-            // Keystore key lost or file corrupted: start clean rather than crash.
-            ctx.deleteSharedPreferences("secure_creds")
-            build()
-        }
+/** Tokens live in EncryptedSharedPreferences (Android Keystore backed). */
+private fun createSecure(ctx: Context): SharedPreferences {
+    fun build(): SharedPreferences {
+        val key = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+        return EncryptedSharedPreferences.create(
+            ctx,
+            "secure_creds",
+            key,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+    return try {
+        build()
+    } catch (e: Exception) {
+        // Keystore key lost or file corrupted: start clean rather than crash.
+        ctx.deleteSharedPreferences("secure_creds")
+        build()
     }
 }

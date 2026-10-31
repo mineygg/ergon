@@ -8,12 +8,16 @@ import org.jsoup.nodes.Element
 data class ScrapedCode(val code: String, val rewards: List<String>, val section: String)
 
 /**
- * Heading-agnostic Game8 code table parser (port of the tested cheerio version).
+ * Heading-agnostic Game8 code parser (port of the tested cheerio version).
  *
  * Walks the page in document order, tracks the h2/h3/h4 path plus intro paragraphs, and extracts
- * every table that has copy-to-clipboard code inputs. Expired codes are skipped by four checks:
- * heading text, a passed expiry date in the intro text, row-level expired markers, and the fact
- * that Game8's expired list has no copy inputs at all.
+ * two layouts:
+ *  - tables with copy-to-clipboard code inputs (the normal "Active Redeem Codes" list);
+ *  - bullet lists of `...gift?code=CODE` links followed by "(Reward x1, Reward x2)", which is how
+ *    Game8 shows the livestream codes. The expiry note of those sits BELOW the list.
+ * Expired codes are skipped by the heading text, a passed expiry date (above or below), and
+ * row-level expired markers. Game8's expired table has no copy inputs, but its expired livestream
+ * list uses the same layout as the active one, so the heading check matters there.
  */
 object CodeParser {
     private val EXPIRED_RE = Regex("""\b(expired|inactive|no longer (valid|work))""", RegexOption.IGNORE_CASE)
@@ -26,6 +30,9 @@ object CodeParser {
     )
     private val WS = Regex("""\s+""")
     private const val DAY_MS = 24L * 60 * 60 * 1000
+
+    private val CODE_PARAM = Regex("""[?&]code=([A-Za-z0-9]{6,24})""")
+    private val REWARD_SPLIT = Regex(""",\s+(?=[A-Za-z])""")
 
     private fun insideTable(el: Element): Boolean = el.parents().any { it.tagName() == "table" }
 
@@ -51,16 +58,22 @@ object CodeParser {
         var h4 = ""
         val intro = StringBuilder()
 
-        for (el in doc.select("h1, h2, h3, h4, p, table")) {
+        // Codes of the last bullet list, whose expiry note (if any) comes after it.
+        var listStart = 0
+        var listEnd = 0
+
+        for (el in doc.select("h1, h2, h3, h4, p, table, ul")) {
             when (el.tagName()) {
                 "h1" -> {}
                 "h2" -> {
+                    listEnd = listStart
                     h2 = el.text().trim()
                     h3 = ""
                     h4 = ""
                     intro.setLength(0)
                 }
                 "h3" -> {
+                    listEnd = listStart
                     h3 = el.text().trim()
                     h4 = ""
                     intro.setLength(0)
@@ -69,7 +82,45 @@ object CodeParser {
                 "h4" -> {
                     h4 = el.text().trim()
                 }
-                "p" -> if (!insideTable(el)) intro.append(' ').append(el.text())
+                "p" -> if (!insideTable(el)) {
+                    intro.append(' ').append(el.text())
+                    if (listEnd > listStart) {
+                        // The note below a livestream list says when its codes stop working.
+                        val expiry = parseExpiry(el.text().replace(WS, " "))
+                        if (expiry != null && expiry + DAY_MS < nowMs) {
+                            out.subList(listStart, listEnd).clear()
+                        }
+                        if (expiry != null) listEnd = listStart
+                    }
+                }
+                "ul" -> {
+                    if (insideTable(el)) continue
+                    val items = el.select("li").filter { it.selectFirst("a[href*='code=']") != null }
+                    if (items.isEmpty()) continue
+
+                    val section = listOf(h2, h3, h4).filter { it.isNotEmpty() }.joinToString(" › ")
+                    if (EXPIRED_RE.containsMatchIn(section)) continue
+
+                    val expiry = parseExpiry(intro.toString().replace(WS, " "))
+                    if (expiry != null && expiry + DAY_MS < nowMs) continue
+
+                    listStart = out.size
+                    for (li in items) {
+                        val link = li.selectFirst("a[href*='code=']") ?: continue
+                        val code = CODE_PARAM.find(link.attr("href"))?.groupValues?.get(1)
+                            ?: link.text().trim().takeIf { it.matches(Regex("[A-Za-z0-9]{6,24}")) }
+                            ?: continue
+                        if (EXPIRED_RE.containsMatchIn(li.select("s, del, strike, .a-red").text())) continue
+                        if (!seen.add(code.lowercase())) continue
+
+                        // "(Stellar Jades x100, Credits x50,000)" after the code link.
+                        val rest = li.text().replace(link.text(), "").replace(WS, " ").trim()
+                        val inner = rest.removePrefix("(").substringBefore(')').trim()
+                        val rewards = if (inner.isEmpty()) emptyList() else inner.split(REWARD_SPLIT).map { it.trim() }.filter { it.isNotEmpty() }
+                        out.add(ScrapedCode(code, rewards, section))
+                    }
+                    listEnd = out.size
+                }
                 "table" -> {
                     if (insideTable(el)) continue
                     if (el.select("input.a-clipboard__textInput").isEmpty()) continue

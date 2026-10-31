@@ -144,7 +144,7 @@ private fun RecordCard(r: RunRecord) {
                 Text(r.summary, style = MaterialTheme.typography.bodyMedium, color = tone)
             }
             Column(horizontalAlignment = Alignment.End) {
-                Pill(if (r.trigger == "scheduled") "Auto" else "Manual", cs.onSurfaceVariant)
+                Pill(if (r.trigger == "scheduled" || r.trigger == "refresh") "Auto" else "Manual", cs.onSurfaceVariant)
                 VSpace(4)
                 Text(
                     DateUtils.getRelativeTimeSpanString(r.timeMillis, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString(),

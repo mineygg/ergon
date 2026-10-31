@@ -12,7 +12,8 @@ import org.json.JSONObject
 
 enum class CheckinStatus { SUCCESS, ALREADY, TOKEN_EXPIRED, CAPTCHA, FAILED }
 
-data class CheckinResult(val status: CheckinStatus, val message: String = "")
+/** [network] = the request never got an answer (no connection, timeout), as opposed to the server refusing. */
+data class CheckinResult(val status: CheckinStatus, val message: String = "", val network: Boolean = false)
 
 data class ApiResult(
     val retcode: Int,
@@ -62,7 +63,7 @@ object HoyoApi {
                 parseCheckin(resp.body?.string().orEmpty())
             }
         } catch (e: IOException) {
-            CheckinResult(CheckinStatus.FAILED, e.message ?: "Network error")
+            CheckinResult(CheckinStatus.FAILED, e.message ?: "Network error", network = true)
         }
     }
 

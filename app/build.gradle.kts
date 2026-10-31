@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = (findProperty("ergonVersionCode") as String?)?.toIntOrNull() ?: 1
-        versionName = (findProperty("ergonVersionName") as String?) ?: "1.2.0"
+        versionName = (findProperty("ergonVersionName") as String?) ?: "1.2.1"
     }
 
     // Release signing key comes from the environment (CI secrets). Without it, builds fall back to the
@@ -33,8 +33,9 @@ android {
 
     buildTypes {
         release {
-            // Left unminified on purpose: fewer moving parts for a hobby build.
-            isMinifyEnabled = false
+            // R8 removes unused code and resources from the libraries (Compose, OkHttp, jsoup, Tink ...).
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("ergon") ?: signingConfigs.getByName("debug")
         }
@@ -47,6 +48,19 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     buildFeatures { compose = true }
+
+    // The app is English only: don't ship the translated strings of every library.
+    androidResources { localeFilters += "en" }
+
+    // Google's signing-block dependency list: not needed, and a little bigger every build.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
+    testOptions {
+        unitTests { isIncludeAndroidResources = true }
+    }
 
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
@@ -77,4 +91,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Test-only: never packaged into the APK.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
 }

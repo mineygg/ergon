@@ -21,7 +21,8 @@
 - **Gift codes** found and redeemed automatically (Genshin, Star Rail, Zenless).
 - **Web events:** the Machine Workshop (Genshin) and Traveling Mimo (Star Rail, Zenless). Ergon collects the
   daily and weekly points for you.
-- **Auto exchange:** spends event points on the rewards you want, in your order of priority.
+- **Auto exchange:** spends event points on the rewards you want, in your order of priority, and grabs limited
+  rewards the moment they come back in stock.
 - **Prize draw** (Traveling Mimo): optionally spends spare points on the daily draws.
 - **Per-game control:** every game has its own Configure screen, so you choose exactly what Ergon does for it.
 - **Runs in the background** and tells you what it claimed, or when a sign-in expired.
@@ -68,6 +69,15 @@ It runs on its own from there.
   missions reset at 00:00 UTC+8 and game missions at 04:00 server time. One run handles the games one after
   the other.
 
+**No internet**
+- Ergon watches the connection. A run that starts offline waits up to 90 seconds for it, and a connection lost
+  halfway waits up to 2 minutes. If it doesn't come back, the run is saved as pending (it survives closing the
+  app and rebooting) and a catch-up job finishes it as soon as there is internet. The Home screen shows what is waiting.
+- Nothing is lost or claimed twice: check-ins, codes and event tasks are saved as they are done, so a resumed run only
+  does what is left. Requests that failed because of the connection are repeated, never counted as a refusal.
+- The hourly run also catches a check-in that never got done today (at most 4 tries a day, 2 hours apart).
+- Runs that start together at 00:30 UTC+8 no longer drop each other: the one that finds the other busy tries again.
+
 **Sign-in and privacy**
 - Sign-in happens in an in-app browser. Ergon keeps only the HoYoLAB cookies it needs, stored encrypted on
   the device, and sends them only to HoYoverse servers.
@@ -91,13 +101,16 @@ It runs on its own from there.
   per day, and Ergon never goes past that. Genshin's prize draw is left to you.
 - If a reward or prize is delivered as a redeem code, Ergon redeems it for you through the gift-code API (needs the second
   sign-in step). Without it, the code is shown in Activity and in the notification.
-- Claimed rewards are hidden. Timed rewards (on a refresh timer) are listed but not claimable until they
-  refresh; they have no timer of their own and are only checked on the normal runs.
+- Claimed rewards are hidden. Timed rewards (on a refresh timer) are listed but not claimable until they refresh.
+  Their stock is first come, first served, so Ergon sets an exact alarm a few seconds before the refresh and
+  claims the moment the reward is back, following your priority list and points as usual. The alarm only exists
+  while auto exchange is waiting for such a reward, and it is set again after a reboot.
 - Every claim request is sent at least 5 seconds after the previous one, across all games.
 
 **Other**
 - Background runs use Android's WorkManager, so they happen even when the app is closed. Nothing runs in
-  between, and there is no always-on service. Phones with strict battery saving may delay the runs, which is
+  between, and there is no always-on service. The one extra is the exact alarm for a timed reward described
+  above. Phones with strict battery saving may delay the runs, which is
   what the *Unrestricted battery usage* button in Settings is for.
 - Ergon checks GitHub for new releases and offers an **Update** button. The check can be turned off in
   Settings. Updates only install over a build signed with the same key.

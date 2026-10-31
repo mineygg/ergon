@@ -4,6 +4,7 @@ import android.app.Application
 import android.webkit.CookieManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.mineygg.ergon.core.Connectivity
 import com.mineygg.ergon.core.ExchangeAward
 import com.mineygg.ergon.core.RunBus
 import com.mineygg.ergon.core.Runner
@@ -44,10 +45,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val log = RunBus.log
     val updateState = Updater.state
 
+    /** Live internet state, and the tasks waiting for it (CHECKIN, REDEEM, WORKSHOP). */
+    val online = Connectivity.online
+    val pending = store.pending
+
     private val _shop = MutableStateFlow<ShopState>(ShopState.Loading)
     val shop: StateFlow<ShopState> = _shop.asStateFlow()
 
     init {
+        Connectivity.start(app)
+        // Whenever the internet comes back (and on start), finish what was waiting for it or got missed.
+        viewModelScope.launch {
+            Connectivity.online.collect { if (it) Scheduler.catchUp(app) }
+        }
         Updater.restore(app, store)
         if (store.settings.value.checkUpdates) checkUpdates(manual = false)
     }
