@@ -2,7 +2,7 @@
   <img src="assets/icon.svg" width="120" alt="Ergon icon">
 </p>
 
-<h1 align="center">Ergon</h1>
+<h1 align="center">Ergon - for HoYolab automations</h1>
 
 <p align="center">
   Automatic HoYoLAB check-ins, gift codes and web events for Genshin Impact, Honkai: Star Rail,<br>
