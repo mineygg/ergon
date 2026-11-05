@@ -8,24 +8,28 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.mineygg.ergon.MainActivity
 import com.mineygg.ergon.R
+import com.mineygg.ergon.data.NewsItem
 import com.mineygg.ergon.data.RedeemEntry
 
 object Notifier {
     private const val CH_RESULT = "result"
     private const val CH_ALERT = "alert"
     private const val CH_WORK = "work"
+    private const val CH_NEWS = "news"
 
     fun createChannels(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH_RESULT, "Claims", NotificationManager.IMPORTANCE_DEFAULT))
         nm.createNotificationChannel(NotificationChannel(CH_ALERT, "Session alerts", NotificationManager.IMPORTANCE_HIGH))
         nm.createNotificationChannel(NotificationChannel(CH_WORK, "Background claims", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CH_NEWS, "HoYoLAB news", NotificationManager.IMPORTANCE_DEFAULT))
     }
 
     fun checkinClaimed(ctx: Context, games: List<String>) =
@@ -66,14 +70,31 @@ object Notifier {
 
     fun alert(ctx: Context, title: String, text: String) = post(ctx, 2, CH_ALERT, title, text)
 
-    private fun post(ctx: Context, id: Int, channel: String, title: String, text: String) {
+    /** An important HoYoLAB post. Tapping it opens the article. */
+    fun news(ctx: Context, item: NewsItem) {
+        val game = Game.entries.firstOrNull { it.id == item.game }?.title.orEmpty()
+        val id = 1000 + (item.id.hashCode() and 0x7FFF)
+        val open = if (item.url.isEmpty()) {
+            null
+        } else {
+            PendingIntent.getActivity(
+                ctx,
+                id,
+                Intent(Intent.ACTION_VIEW, Uri.parse(item.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
+        post(ctx, id, CH_NEWS, "$game: ${item.title}".trim(), item.text.ifBlank { item.title }, open)
+    }
+
+    private fun post(ctx: Context, id: Int, channel: String, title: String, text: String, open: PendingIntent? = null) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             return
         }
 
-        val open = PendingIntent.getActivity(
+        val tap = open ?: PendingIntent.getActivity(
             ctx,
             0,
             Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -84,7 +105,7 @@ object Notifier {
             .setContentTitle(title)
             .setContentText(text.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(open)
+            .setContentIntent(tap)
             .setAutoCancel(true)
             .build()
         try {

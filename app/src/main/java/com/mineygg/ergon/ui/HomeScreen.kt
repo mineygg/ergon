@@ -5,11 +5,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,8 +30,12 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -68,6 +76,7 @@ fun HomeScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit) {
     val update by vm.updateState.collectAsStateWithLifecycle()
     val online by vm.online.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
+    val webhooks by vm.webhooks.collectAsStateWithLifecycle()
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -83,7 +92,21 @@ fun HomeScreen(vm: MainViewModel, pad: PaddingValues, onLogin: (Int) -> Unit) {
         if (settings.checkUpdates) item { UpdateBanner(update, onUpdate = vm::startUpdate) }
         item { Hero(settings, creds, checkin, active, live, onLogin) }
         item { CheckinCard(settings, creds, checkin, active, live, onRun = vm::runCheckin, onStop = vm::stop) }
-        item { CodesCard(settings, creds, redeem, lastCheck, active, live, onRun = vm::runRedeem, onStop = vm::stop) }
+        item {
+            CodesCard(
+                settings,
+                creds,
+                redeem,
+                lastCheck,
+                active,
+                live,
+                webhooks,
+                onRun = vm::runRedeem,
+                onStop = vm::stop,
+                onSaveWebhooks = vm::saveWebhooks,
+                onRemoveWebhook = vm::removeWebhook
+            )
+        }
         for (wg in WorkshopGame.entries) {
             if (wg.id !in settings.workshopGames) continue
             item(key = "workshop_${wg.id}") {
@@ -230,7 +253,7 @@ private fun Hero(
                 VSpace(16)
                 Button(
                     onClick = { onLogin(if (!creds.hasHoyolab || creds.hoyolabExpired) 1 else 2) },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     shape = RoundedCornerShape(14.dp)
                 ) {
                     Text(
@@ -247,28 +270,31 @@ private fun Hero(
 }
 
 @Composable
-private fun CardHeader(title: String, subtitle: String, tint: Color) {
+private fun CardHeader(title: String, subtitle: String, tint: Color, trailing: @Composable () -> Unit = {}) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(tint.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
             Icon(Icons.Default.CheckCircle, contentDescription = null, tint = tint)
         }
         HSpace(12)
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        trailing()
     }
 }
 
 /** Run on the left, Stop on the right (only active while something is running). */
 @Composable
 private fun RunButton(label: String, running: Boolean, enabled: Boolean, onClick: () -> Unit, onStop: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    // The buttons grow with their text (long labels, large font sizes) instead of clipping it, and stay level.
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         FilledTonalButton(
             onClick = onClick,
             enabled = enabled,
-            modifier = Modifier.weight(1f).height(48.dp),
-            shape = RoundedCornerShape(14.dp)
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).fillMaxHeight(),
+            shape = RoundedCornerShape(14.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
         ) {
             if (running) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
@@ -277,14 +303,15 @@ private fun RunButton(label: String, running: Boolean, enabled: Boolean, onClick
             } else {
                 Icon(Icons.Default.PlayArrow, contentDescription = null)
                 HSpace(8)
-                Text(label, fontWeight = FontWeight.SemiBold)
+                Text(label, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, maxLines = 2)
             }
         }
         OutlinedButton(
             onClick = onStop,
             enabled = running,
-            modifier = Modifier.height(48.dp),
-            shape = RoundedCornerShape(14.dp)
+            modifier = Modifier.heightIn(min = 48.dp).fillMaxHeight(),
+            shape = RoundedCornerShape(14.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Box(Modifier.size(12.dp).background(LocalContentColor.current, RoundedCornerShape(2.dp)))
             HSpace(8)
@@ -367,15 +394,31 @@ private fun CodesCard(
     lastCheck: Long,
     active: Task?,
     live: Live,
+    webhooks: Set<String>,
     onRun: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onSaveWebhooks: (Map<String, String>, (Map<String, String>) -> Unit) -> Unit,
+    onRemoveWebhook: (String) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
     val extra = LocalExtra.current
     val running = active == Task.REDEEM
+    var showWebhooks by rememberSaveable { mutableStateOf(false) }
+
+    if (showWebhooks) {
+        WebhookDialog(webhooks, onSaveWebhooks, onRemoveWebhook) { showWebhooks = false }
+    }
 
     AppCard {
-        CardHeader("Gift codes", "Checked hourly", cs.secondary)
+        CardHeader("Gift codes", "Checked every 30 min", cs.secondary) {
+            TextButton(
+                onClick = { showWebhooks = true },
+                modifier = Modifier.height(32.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+            ) {
+                Text("Webhook", style = MaterialTheme.typography.labelMedium, color = if (webhooks.isEmpty()) cs.onSurfaceVariant else cs.primary)
+            }
+        }
         VSpace(12)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatTile("${if (running) live.claimed else report?.claimed ?: 0}", "Redeemed", extra.success, Modifier.weight(1f))

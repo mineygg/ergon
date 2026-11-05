@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -47,14 +47,14 @@ fun UpdateControls(state: UpdateState, onCheck: () -> Unit, onUpdate: () -> Unit
     }
     val canUpdate = state is UpdateState.Available || state is UpdateState.NeedsPermission
     if (canUpdate) {
-        Button(onClick = onUpdate, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(14.dp)) {
+        Button(onClick = onUpdate, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(14.dp)) {
             Text("Update", fontWeight = FontWeight.SemiBold)
         }
     } else {
         OutlinedButton(
             onClick = onCheck,
             enabled = state !is UpdateState.Checking && state !is UpdateState.Downloading,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             shape = RoundedCornerShape(14.dp)
         ) {
             Text(

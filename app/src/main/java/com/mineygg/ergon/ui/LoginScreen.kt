@@ -1,6 +1,7 @@
 package com.mineygg.ergon.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.net.Uri
@@ -32,9 +33,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -69,7 +73,6 @@ import com.mineygg.ergon.MainViewModel
 import com.mineygg.ergon.core.DeviceHeaders
 import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.HoyoApi
-import com.mineygg.ergon.data.Credentials
 import kotlinx.coroutines.delay
 
 private const val HOYOLAB_URL = "https://www.hoyolab.com/home"
@@ -82,10 +85,12 @@ private val REDEEM_PAGES = listOf(
 )
 
 /** Redeem page of the first game (Genshin, then Star Rail, then Zenless) this account actually has, or null. */
-private suspend fun redeemPageFor(cr: Credentials): String? {
+private suspend fun redeemPageFor(vm: MainViewModel): String? {
     for ((game, url) in REDEEM_PAGES) {
-        val biz = game.redeem?.gameBiz ?: continue
-        if (HoyoApi.discover(biz, cr).isNotEmpty()) return url
+        if (game.redeem == null) continue
+        // The profile was read at sign-in. Only a game it was never read for is asked again.
+        val known = vm.accounts.value[game.id] ?: vm.profile(game)
+        if (!known.isNullOrEmpty()) return url
     }
     return null
 }
@@ -138,6 +143,26 @@ private fun configure(wv: WebView, cm: CookieManager) {
     }
 }
 
+/**
+ * Sign-in pages (X, Facebook, ...) sometimes try to open their own app (twitter://, intent://, market://). Ergon can't
+ * read a login done in another app, so such links are blocked and the page carries on with its web login. An
+ * intent:// link that names a web fallback goes to that fallback. Normal web links are left alone.
+ */
+private fun blockAppLink(view: WebView?, request: WebResourceRequest?): Boolean {
+    val uri = request?.url ?: return false
+    val scheme = uri.scheme?.lowercase().orEmpty()
+    if (scheme in WEB_SCHEMES) return false
+    if (scheme == "intent") {
+        val fallback = runCatching {
+            Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url")
+        }.getOrNull()
+        if (fallback != null && fallback.startsWith("https://")) view?.loadUrl(fallback)
+    }
+    return true
+}
+
+private val WEB_SCHEMES = setOf("http", "https", "about", "data", "blob", "javascript")
+
 @Composable
 fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -151,6 +176,7 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
     var popup by remember { mutableStateOf<WebView?>(null) }
     var popupUrl by remember { mutableStateOf("") }
     var redeemUrl by remember { mutableStateOf<String?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     // If the redeem session was flagged expired, don't accept the same stale cookie again.
     val staleCookieToken = remember { vm.creds.value.let { if (it.loginExpired) it.cookieToken else "" } }
@@ -161,7 +187,7 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
         if (!accepted) return@LaunchedEffect
         if (step == 2 && redeemUrl == null) {
             // Only send the player to a game they actually have, otherwise there is nothing to sign in to.
-            val url = redeemPageFor(vm.creds.value)
+            val url = redeemPageFor(vm)
             if (url == null) {
                 onClose()
                 return@LaunchedEffect
@@ -182,6 +208,7 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
                 lastTried = sig
                 if (HoyoApi.validateHoyolab(token, uid)) {
                     vm.saveHoyolab(token, uid)
+                    vm.refreshProfile()
                     step = 2
                     break
                 }
@@ -210,7 +237,7 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
 
     Surface(Modifier.fillMaxSize(), color = cs.background, contentColor = cs.onBackground) {
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
-            Row(Modifier.padding(start = 4.dp, end = 12.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(start = 4.dp, end = 4.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close") }
                 Column(Modifier.weight(1f)) {
                     Text("Connect account", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -219,6 +246,40 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = cs.onSurfaceVariant
                     )
+                }
+                // Browser controls. They act on the Google popup while it is open, otherwise on the main page.
+                Box {
+                    IconButton(onClick = { menuOpen = true }, enabled = accepted) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More options")
+                    }
+                    val target = popup ?: holder.view
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Back") },
+                            enabled = menuOpen && target?.canGoBack() == true,
+                            onClick = {
+                                menuOpen = false
+                                target?.goBack()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Forward") },
+                            enabled = menuOpen && target?.canGoForward() == true,
+                            onClick = {
+                                menuOpen = false
+                                target?.goForward()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Reload") },
+                            enabled = target != null,
+                            onClick = {
+                                menuOpen = false
+                                error = null
+                                target?.reload()
+                            }
+                        )
+                    }
                 }
             }
 
@@ -270,6 +331,9 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
                                         val child = WebView(parent.context)
                                         configure(child, cm)
                                         child.webViewClient = object : WebViewClient() {
+                                            override fun shouldOverrideUrlLoading(v: WebView?, r: WebResourceRequest?) =
+                                                blockAppLink(v, r)
+
                                             override fun onPageStarted(v: WebView?, url: String?, favicon: Bitmap?) {
                                                 popupUrl = url.orEmpty()
                                             }
@@ -292,6 +356,9 @@ fun LoginScreen(vm: MainViewModel, startStep: Int, onClose: () -> Unit) {
                                     }
                                 }
                                 webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) =
+                                        blockAppLink(view, request)
+
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                         error = null
                                         pageUrl = url.orEmpty()

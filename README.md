@@ -2,7 +2,7 @@
   <img src="assets/icon.svg" width="120" alt="Ergon icon">
 </p>
 
-<h1 align="center">Ergon - for HoYolab automations</h1>
+<h1 align="center">Ergon - For HoYolab Automation</h1>
 
 <p align="center">
   Automatic HoYoLAB check-ins, gift codes and web events for Genshin Impact, Honkai: Star Rail,<br>
@@ -60,11 +60,51 @@ It runs on its own from there.
   gift codes and the web event on or off. Only what a game supports is shown: Honkai Impact 3rd and Tears of
   Themis only have the check-in.
 - When a game's web event is on, **Auto exchange** and **Exchange priority** appear there too.
+- **Regions:** Ergon reads your HoYoLAB profile when you sign in and on every check-in, and keeps the game accounts
+  it lists. A game where you have accounts in several regions shows a **Regions** card with one switch per region you
+  actually have an account in. Switch off a region you don't want automated; at least one stays on. Gift codes are
+  only redeemed on the accounts of the regions that are on. (The daily check-in is a single request for your whole
+  HoYoLAB account, so it doesn't depend on the region.)
+
+**News (HoYoLAB events)**
+- Off by default. The **News** tab is always there; in a game's Configure screen, switch on **HoYoLAB news** to fill
+  it. With no game switched on, Ergon doesn't fetch anything. Chips at the top filter the list by game.
+- Every 6 hours Ergon reads the newest 15 entries of the public HoYoLAB event list of each game that has News on (no
+  sign-in needed). The game of an event is known from the list it comes from.
+- An event is important when it gives a premium currency or pass (Primogems, Genesis Crystals, Fates, Welkin Moon,
+  Stellar Jade, Oneiric Shards, Special Passes, Polychrome, Monochrome, Master Tapes, S-Chips), or is a web event, a
+  raffle, a figure or a hardware prize (phone, laptop, MacBook, iPad, PlayStation, Xbox, Switch). Codes, Stellin and
+  gift cards alone don't count: Ergon redeems codes on its own.
+- Never important, even with a reward word: top-up and share events, creator contests, Machine Workshop and Travel
+  Mimo, Wonderland events, birthdays, fan art, screenshot and submission contests, and the Time Album posts. The words
+  are in `NewsWords` (`News.kt`).
+- An event stays while it is running and for 30 days after it ended, up to 100 in all games together, and also when it
+  drops out of the newest 15. A match shows with its title, a short text and an **Open article** button, and as a
+  notification that opens the article. The newest 15 ids of each game are remembered, so nothing comes twice.
+- The first check of a game (or when you turn it on again) only fills the News tab: nothing is notified for what is
+  already there. An info button in the tab explains all this.
+
+**Discord webhook (gift codes)**
+- The small **Webhook** button in the Gift codes card opens a popup with one box for Genshin Impact, Honkai: Star Rail
+  and Zenless Zone Zero. Paste a Discord webhook URL (Server Settings, Integrations, Webhooks) for each game you want.
+- Saving sends one short test message and keeps the URL only if Discord accepts it. The URL is stored encrypted, is
+  never shown again (the box shows dots, with Replace and a bin to remove it) or logged, and only Discord's own
+  addresses are accepted.
+- Only codes Ergon hasn't seen before are posted. It remembers the codes of every code check, with or without a
+  webhook, so a webhook you save starts from that and the codes found after the last check are posted. Only when
+  Ergon has seen nothing yet, the first check just notes what is listed. A code is never posted twice. Each code
+  is a header with its rewards in small text under it and a bold **Click to claim** link to the game's redeem page. A
+  message holds as many codes as Discord's 2000-character limit allows, the rest go into further messages ("1/2",
+  "2/2"), a second apart, and Ergon waits as long as Discord asks when it answers "slow down". If Discord can't be
+  reached, the rest is sent on a later pass.
+- Posting happens during the code check, so it needs the game's auto-redeem switched on and you signed in.
 
 **Schedule**
 - Check-in runs once a day, 30 minutes after the daily reset (00:30 UTC+8). Games already claimed that day
   are never requested again.
-- Gift codes are checked every hour and fully re-scanned every 6 hours.
+- Gift codes are checked every 30 minutes (the hoyo-codes list every time, the Game8 page about once an hour) and
+  fully re-scanned every 6 hours. A code found by either source is redeemed once, and each source can fail without
+  holding back the other.
 - The web events run 30 minutes after each reset, 15 minutes before each reset and every 6 hours. Community
   missions reset at 00:00 UTC+8 and game missions at 04:00 server time. One run handles the games one after
   the other.
@@ -75,7 +115,7 @@ It runs on its own from there.
   app and rebooting) and a catch-up job finishes it as soon as there is internet. The Home screen shows what is waiting.
 - Nothing is lost or claimed twice: check-ins, codes and event tasks are saved as they are done, so a resumed run only
   does what is left. Requests that failed because of the connection are repeated, never counted as a refusal.
-- The hourly run also catches a check-in that never got done today (at most 4 tries a day, 2 hours apart).
+- The 30-minute run also catches a check-in that never got done today (at most 4 tries a day, 2 hours apart).
 - Runs that start together at 00:30 UTC+8 no longer drop each other: the one that finds the other busy tries again.
 
 **Sign-in and privacy**
@@ -88,8 +128,10 @@ It runs on its own from there.
 **Machine Workshop and Traveling Mimo**
 - Genshin has the Machine Workshop, Star Rail and Zenless have Traveling Mimo. All three work the same way and
   each has its own card on the Home screen, its own on/off switch and its own auto exchange settings.
-- Each task gets one attempt to be completed through the API per day or week. If the server refuses
-  (for example it needs in-game play), the task is only watched, and claimed once its progress is complete.
+- Tasks that need you in the game (known per game) are never completed through the API: they are only watched,
+  and claimed once their progress is complete.
+- Every other task gets one attempt to be completed through the API per day or week. If the server refuses,
+  the task is only watched, and claimed once its progress is complete.
 - Tasks already claimed are skipped.
 - **Auto exchange** (off by default, per game): after the tasks, the exchange shop is read once per run.
   Rewards that cost 0 are always claimed. Then the rewards in that game's **Exchange priority** list are claimed

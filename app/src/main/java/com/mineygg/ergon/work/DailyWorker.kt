@@ -16,6 +16,7 @@ import androidx.work.workDataOf
 import com.mineygg.ergon.ClaimApp
 import com.mineygg.ergon.core.CheckinStatus
 import com.mineygg.ergon.core.Game
+import com.mineygg.ergon.core.News
 import com.mineygg.ergon.core.Runner
 import com.mineygg.ergon.core.Task
 import com.mineygg.ergon.core.Time
@@ -80,13 +81,23 @@ class WorkshopWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 }
 
-/** Runs hourly. Does nothing expensive unless a code page changed (full pass every 6 hours). */
+/** Every 6 hours: looks for important HoYoLAB posts about the games that have News turned on. Does nothing when none has. */
+class NewsWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result {
+        val app = applicationContext as ClaimApp
+        News.check(app, app.store, notify = true)
+        // A failed check is not retried: the next one is in 6 hours, and nothing is lost, the list keeps what was not seen.
+        return Result.success()
+    }
+}
+
+/** Runs every 30 minutes. Does nothing expensive unless a code source changed (full pass every 6 hours). */
 class RedeemWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as ClaimApp
         val runner = Runner(app, app.store)
         runner.runRedeem("scheduled", force = false)
-        // The hourly run doubles as a safety net: anything pending or missed (a check-in whose run was lost) is picked up here.
+        // The 30-minute run doubles as a safety net: anything pending or missed (a check-in whose run was lost) is picked up here.
         Scheduler.catchUp(app)
         return resultFor(app, runner, Task.REDEEM, runAttemptCount, 2)
     }
@@ -156,10 +167,12 @@ object CatchUp {
 object Scheduler {
     private const val CATCH_UP = "catch_up"
     private const val CHECKIN = "checkin_daily"
-    private const val REDEEM = "redeem_watch"
+    private const val REDEEM = "redeem_watch_30m"
     private const val WORKSHOP_WATCH = "workshop_watch"
+    private const val NEWS = "news_watch"
     private const val LEGACY = "daily_run"
     private const val LEGACY_WORKSHOP = "workshop_daily"
+    private const val LEGACY_REDEEM = "redeem_watch" // hourly, replaced by the 30 minute job
 
     /**
      * Makes sure unfinished work gets done as soon as there is internet. Does nothing if there is none, or if
@@ -190,17 +203,20 @@ object Scheduler {
      * Fixed schedule (not user adjustable):
      *  - check-in: every 24h, first run at the next 00:30 UTC+8
      *  - Machine Workshop: 23:45, 00:30, 03:45 and 04:30 UTC+8, plus a re-check every 6 hours
-     *  - codes: every hour
+     *  - codes: every 30 minutes (the Game8 page about hourly, the hoyo-codes API every time)
+     *  - news: every 6 hours
      * [replace] re-times existing jobs; false keeps them (use on app start).
      */
     fun schedule(ctx: Context, s: Settings, replace: Boolean) {
         val wm = WorkManager.getInstance(ctx)
         wm.cancelUniqueWork(LEGACY)
         wm.cancelUniqueWork(LEGACY_WORKSHOP)
+        wm.cancelUniqueWork(LEGACY_REDEEM)
         if (!s.autoRun) {
             wm.cancelUniqueWork(CHECKIN)
             wm.cancelUniqueWork(REDEEM)
             wm.cancelUniqueWork(WORKSHOP_WATCH)
+            wm.cancelUniqueWork(NEWS)
             WORKSHOP_SLOTS.forEach { wm.cancelUniqueWork(it.name) }
             wm.cancelUniqueWork(CATCH_UP)
             return
@@ -240,9 +256,18 @@ object Scheduler {
         )
 
         wm.enqueueUniquePeriodicWork(
+            NEWS,
+            policy,
+            PeriodicWorkRequestBuilder<NewsWorker>(6, TimeUnit.HOURS)
+                .setInitialDelay(2, TimeUnit.HOURS)
+                .setConstraints(online)
+                .build()
+        )
+
+        wm.enqueueUniquePeriodicWork(
             REDEEM,
             policy,
-            PeriodicWorkRequestBuilder<RedeemWorker>(1, TimeUnit.HOURS)
+            PeriodicWorkRequestBuilder<RedeemWorker>(30, TimeUnit.MINUTES)
                 .setInitialDelay(15, TimeUnit.MINUTES)
                 .setConstraints(online)
                 .build()

@@ -29,6 +29,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mineygg.ergon.MainViewModel
 import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.WorkshopGame
+import com.mineygg.ergon.core.regionName
 import com.mineygg.ergon.data.ExchangeMode
 import com.mineygg.ergon.data.ExchangePrefs
 
@@ -41,6 +42,7 @@ import com.mineygg.ergon.data.ExchangePrefs
 fun GameConfigScreen(vm: MainViewModel, game: Game, onExchange: (WorkshopGame) -> Unit, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val s by vm.settings.collectAsStateWithLifecycle()
+    val profile by vm.accounts.collectAsStateWithLifecycle()
     val wg = WorkshopGame.entries.firstOrNull { it.game == game }
 
     Surface(Modifier.fillMaxSize(), color = cs.background, contentColor = cs.onBackground) {
@@ -75,6 +77,10 @@ fun GameConfigScreen(vm: MainViewModel, game: Game, onExchange: (WorkshopGame) -
                                 vm.updateSettings { it.copy(workshopGames = it.workshopGames.toggled(wg.id, on)) }
                             }
                         }
+                        HorizontalDivider(color = cs.outlineVariant)
+                        ToggleRow("HoYoLAB news", "Show important events and giveaways of ${game.title}", game.id in s.newsGames) { on ->
+                            vm.updateSettings { it.copy(newsGames = it.newsGames.toggled(game.id, on)) }
+                        }
                     }
                 }
 
@@ -99,10 +105,42 @@ fun GameConfigScreen(vm: MainViewModel, game: Game, onExchange: (WorkshopGame) -
                     }
                 }
 
+                // The regions this HoYoLAB account has a game account in (as of the last time the profile was read).
+                val known = profile[game.id].orEmpty()
+                val regionList = known.map { it.region }.distinct()
+                if (regionList.isNotEmpty()) {
+                    item {
+                        val picked = s.pickedRegions(game, known)
+                        AppCard {
+                            Text("Regions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Switch off a region you have an account in but don't want Ergon to automate.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = cs.onSurfaceVariant
+                            )
+                            VSpace(4)
+                            regionList.forEachIndexed { i, region ->
+                                if (i > 0) HorizontalDivider(color = cs.outlineVariant)
+                                val who = known.filter { it.region == region }
+                                    .joinToString(", ") { a -> if (a.nickname.isEmpty()) a.uid else "${a.nickname} · ${a.uid}" }
+                                ToggleRow(regionName(region), who, region in picked) { on ->
+                                    vm.updateSettings { it.withRegion(game, known, region, on) }
+                                }
+                            }
+                            VSpace(4)
+                            Text(
+                                "At least one region stays on.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = cs.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
                 if (game.redeem == null) {
                     item {
                         Text(
-                            "Only the daily check-in is available for this game.",
+                            "Gift codes and the web event aren't available for this game.",
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 4.dp)

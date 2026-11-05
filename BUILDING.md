@@ -47,7 +47,8 @@ No local Gradle/SDK? Push this folder to a GitHub repo and run the **Build APK**
   30 min after each reset (00:30 and 04:30 UTC+8), as a mandatory claim 15 min before each reset (23:45 and
   03:45 UTC+8), and every 6 hours. "Collect now" also retries tasks marked "needs you". The prize draw and
   the exchange are left to you.
-- **Requests:** headers come from this device's real WebView/Chrome (user agent, client hints, Sec-Fetch).
+- **Requests:** headers come from this device's real WebView engine (user agent, client hints, Sec-Fetch). Ergon
+  presents itself as its own browser, `Ergon/<version>` on Chromium, and never as Google Chrome.
   Cookies, including Cloudflare's `cf_clearance`, are shared between the hidden WebView and OkHttp, so
   once a challenge is solved plain requests usually pass. OkHttp's TLS fingerprint is not Chrome's, so
   the WebView stays as the fallback.

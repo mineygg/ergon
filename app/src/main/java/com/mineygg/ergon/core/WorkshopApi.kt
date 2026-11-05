@@ -14,11 +14,16 @@ enum class WorkshopGame(
     val shortName: String,
     val legacy: Boolean,
     /** task_type values of in-game missions (reset 04:00 server time). Everything else is a community mission (00:00 UTC+8). */
-    val gameTaskTypes: Set<Int>
+    val gameTaskTypes: Set<Int>,
+    /**
+     * task_id values that need the player in the game. They are never completed through the API: they are only
+     * watched, and claimed once their progress is complete.
+     */
+    val playerTaskIds: Set<Int>
 ) {
-    GENSHIN(Game.GENSHIN, 2, "Machine Workshop", "Genshin", true, setOf(6)),
-    HSR(Game.HSR, 6, "Traveling Mimo", "Star Rail", false, setOf(8)),
-    ZZZ(Game.ZZZ, 8, "Traveling Mimo", "Zenless", false, setOf(12, 16));
+    GENSHIN(Game.GENSHIN, 2, "Machine Workshop", "Genshin", true, setOf(6), setOf(4, 10, 34)),
+    HSR(Game.HSR, 6, "Traveling Mimo", "Star Rail", false, setOf(8), setOf(3, 12, 18)),
+    ZZZ(Game.ZZZ, 8, "Traveling Mimo", "Zenless", false, setOf(12, 16), setOf(3, 4, 5, 6, 7, 9));
 
     val id: String get() = game.id
 
@@ -32,6 +37,9 @@ enum class WorkshopGame(
     val canDraw: Boolean get() = !legacy
 
     fun isGameTask(taskType: Int): Boolean = taskType in gameTaskTypes
+
+    /** True for a task that the player has to play. Ergon only claims it once it is complete. */
+    fun needsPlayer(taskId: Int): Boolean = taskId in playerTaskIds
 }
 
 data class WorkshopAct(

@@ -47,6 +47,12 @@ class Runner(private val ctx: Context, private val store: Store) {
 
         private const val FULL_PASS_MS = 6L * 60 * 60 * 1000
 
+        /** The Game8 page is read when it was last read this long ago (the hoyo-codes API is asked on every run). */
+        private const val SITE_CHECK_MS = 50L * 60 * 1000
+
+        /** Codes remembered per game (seen and posted), before the ones no longer listed are dropped. */
+        private const val MAX_ANNOUNCED = 300
+
         // Connection handling. A scheduled run waits this long for the internet to come back, then is resumed later.
         private const val WAIT_START_MS = 90_000L
         private const val WAIT_MID_RUN_MS = 120_000L
@@ -202,6 +208,10 @@ class Runner(private val ctx: Context, private val store: Store) {
     private suspend fun <T> netPair(idempotent: Boolean = true, call: suspend () -> Pair<ApiResult, T>): Pair<ApiResult, T> =
         netCall(idempotent, call) { it.first.network }
 
+    /** Reads the HoYoLAB profile of [game] and keeps it. Returns null when it couldn't be read; the saved profile stays as it was. */
+    private suspend fun profile(game: Game, cr: Credentials): List<Account>? =
+        HoyoApi.discoverOrNull(game.biz, cr)?.also { store.saveAccounts(game, it) }
+
     // ── Daily check-in ──────────────────────────────────────────────────────
     private suspend fun checkin(trigger: String): RunReport? {
         val s = store.settings.value
@@ -255,6 +265,8 @@ class Runner(private val ctx: Context, private val store: Store) {
                 break
             }
             results[g.id] = r.status.name
+            // The check-in just reached the server, so the profile is read again to keep the saved accounts current.
+            if (r.status == CheckinStatus.SUCCESS || r.status == CheckinStatus.ALREADY) profile(g, cr)
 
             when (r.status) {
                 CheckinStatus.SUCCESS -> {
@@ -329,6 +341,61 @@ class Runner(private val ctx: Context, private val store: Store) {
         return report
     }
 
+    /**
+     * Remembers the codes of [game] and posts the new ones to its Discord webhook, if it has one. Returns what went
+     * wrong, or null. Every code seen is remembered ([Store.seen]) whether or not there is a webhook, so a webhook
+     * saved later starts from what Ergon already knew, and what it finds after that is posted. Only when nothing was
+     * seen before, the first look just notes what is listed, so old codes aren't posted.
+     */
+    private suspend fun announce(game: Game, codes: List<ScrapedCode>): String? {
+        // Codes are compared in lower case: the two sources spell the same code differently (KeepUpWithMitya on the
+        // code page, KEEPUPWITHMITYA in the API), and a run that only reads one of them must not see it as new.
+        val listed = codes.map { it.code.lowercase() }.toSet()
+        val seenBefore = store.seen(game.id)?.map { it.lowercase() }?.toSet()
+        fun remember() {
+            var all = (seenBefore ?: emptySet()) + listed
+            if (all.size > MAX_ANNOUNCED) all = all.filter { it in listed }.toSet()
+            store.setSeen(game.id, all)
+        }
+
+        val url = store.webhook(game.id)
+        if (url == null) {
+            remember()
+            return null
+        }
+        var before = store.announced(game.id).map { it.lowercase() }.toSet()
+        if (!store.webhookReady(game.id)) {
+            if (seenBefore == null) {
+                // Nothing was seen yet: what is listed now is the starting point and isn't posted.
+                store.setAnnounced(game.id, listed)
+                store.setWebhookReady(game.id)
+                remember()
+                RunBus.log("• ${game.title}: Discord webhook ready, new codes will be posted")
+                return null
+            }
+            // Start from what was known before this check: anything found since is new.
+            before = seenBefore
+            store.setAnnounced(game.id, before)
+            store.setWebhookReady(game.id)
+            RunBus.log("• ${game.title}: Discord webhook ready")
+        }
+        remember()
+        val fresh = codes.filter { it.code.lowercase() !in before }
+        if (fresh.isEmpty()) return null
+
+        RunBus.log("${game.title}: posting ${fresh.size} new code(s) to Discord")
+        val result = Discord.send(url, Discord.batches(game, fresh)) { RunBus.log(it) }
+        var next = before + result.delivered.map { it.code.lowercase() }
+        // Codes that left the page are forgotten once the list gets long.
+        if (next.size > MAX_ANNOUNCED) next = next.filter { it in listed }.toSet()
+        store.setAnnounced(game.id, next)
+        if (result.failure != null) RunBus.log("⚠ ${game.title}: Discord: ${result.failure}")
+        return result.failure
+    }
+
+    /** A fingerprint of a list of codes, to tell whether a source has anything new. */
+    private fun signature(codes: List<ScrapedCode>): String = codes.map { it.code }.sorted().joinToString(",").hashCode().toString()
+
     // ── Gift codes ──────────────────────────────────────────────────────────
     private suspend fun redeem(trigger: String, force: Boolean): RunReport? {
         val s = store.settings.value
@@ -372,36 +439,65 @@ class Runner(private val ctx: Context, private val store: Store) {
                 RunBus.step("${game.title}: checking code page")
 
                 awaitConnection(initial = false)
-                val fetched = Game8Fetcher.fetch(ctx, store, game.id, rc.scrapeUrl, conditional = !full) { RunBus.log(it) }
-                if (fetched.notModified) {
-                    RunBus.log("• ${game.title}: page unchanged")
-                    continue
+                // Two sources, each of which can succeed or fail on its own: the Game8 page (on a full pass and about
+                // once an hour) and the hoyo-codes API (on every run).
+                var siteCodes = emptyList<ScrapedCode>()
+                var siteSig: String? = null // null: the page wasn't read, or is unchanged
+                var siteFailed = false
+                if (full || now - store.siteChecked(game.id) >= SITE_CHECK_MS) {
+                    val fetched = Game8Fetcher.fetch(ctx, store, game.id, rc.scrapeUrl, conditional = !full) { RunBus.log(it) }
+                    val html = fetched.html
+                    if (fetched.notModified) {
+                        store.setSiteChecked(game.id, System.currentTimeMillis())
+                        RunBus.log("• ${game.title}: page unchanged")
+                    } else if (html == null) {
+                        siteFailed = true
+                    } else {
+                        store.setSiteChecked(game.id, System.currentTimeMillis())
+                        siteCodes = withContext(Dispatchers.Default) { CodeParser.parse(html) }
+                        siteSig = signature(siteCodes)
+                        if (siteCodes.isEmpty()) {
+                            RunBus.log("⚠ ${game.title}: no codes found (page layout may have changed)")
+                            notices.add(RecordItem(game.id, game.title, "No codes found on the page", ItemState.WARN))
+                        }
+                    }
                 }
-                val html = fetched.html
-                if (html == null) {
-                    if (!Connectivity.isOnline(ctx)) throw OfflineException()
-                    RunBus.log("⚠ ${game.title}: couldn't load the code page")
-                    notices.add(RecordItem(game.id, game.title, "Couldn't load the code page", ItemState.WARN))
+                val apiCodes = SeriaCodes.fetch(rc.seriaGame)
+                val apiSig = apiCodes?.let { signature(it) }
+
+                // Something that returned nothing while the phone is offline is the connection, not the source.
+                if ((siteFailed || apiCodes == null) && !Connectivity.isOnline(ctx)) throw OfflineException()
+                if (siteFailed) {
+                    // The full pass is tried again.
                     aborted = true
-                    continue
+                    if (apiCodes == null) {
+                        RunBus.log("⚠ ${game.title}: couldn't load the code page")
+                        notices.add(RecordItem(game.id, game.title, "Couldn't load the code page", ItemState.WARN))
+                        continue
+                    }
+                    RunBus.log("⚠ ${game.title}: couldn't load the code page, using hoyo-codes only")
+                } else if (apiCodes == null) {
+                    RunBus.log("• ${game.title}: hoyo-codes couldn't be reached")
+                    // Nothing was read at all this run.
+                    if (siteSig == null) continue
                 }
 
-                val codes = withContext(Dispatchers.Default) { CodeParser.parse(html) }
-                if (codes.isEmpty()) {
-                    RunBus.log("⚠ ${game.title}: no codes found (page layout may have changed)")
-                    notices.add(RecordItem(game.id, game.title, "No codes found on the page", ItemState.WARN))
-                } else {
+                val codes = SeriaCodes.merge(siteCodes, apiCodes.orEmpty())
+                if (codes.isNotEmpty()) {
                     RunBus.log("${game.title}: ${codes.size} active code(s)")
+                    announce(game, codes)?.let { notices.add(RecordItem(game.id, game.title, "Discord: $it", ItemState.WARN)) }
                 }
 
-                val sig = codes.map { it.code }.sorted().joinToString(",").hashCode().toString()
-                if (!full && sig == store.codesSig(game.id)) {
+                val siteChanged = siteSig != null && siteSig != store.codesSig(game.id)
+                val apiChanged = apiSig != null && apiSig != store.codesSig("seria:${game.id}")
+                if (!full && !siteChanged && !apiChanged) {
                     RunBus.log("• ${game.title}: no new codes")
                     continue
                 }
 
                 awaitConnection(initial = false)
-                val accounts = HoyoApi.discover(rc.gameBiz, cr)
+                val known = profile(game, cr).orEmpty()
+                val accounts = s.accountsToUse(game, known)
                 if (accounts.isEmpty()) {
                     // An empty list while offline is the connection, not a missing account.
                     if (!Connectivity.isOnline(ctx)) throw OfflineException()
@@ -481,7 +577,11 @@ class Runner(private val ctx: Context, private val store: Store) {
                     if (ai < accounts.size - 1) delay(BETWEEN_ACCOUNT_MS)
                 }
 
-                if (gameOk) store.setCodesSig(game.id, sig)
+                if (gameOk) {
+                    // Only the sources that were actually read count as seen.
+                    siteSig?.let { store.setCodesSig(game.id, it) }
+                    apiSig?.let { store.setCodesSig("seria:${game.id}", it) }
+                }
                 if (gi < games.size - 1) delay(BETWEEN_GAME_MS)
             }
         } catch (e: OfflineException) {
@@ -519,7 +619,7 @@ class Runner(private val ctx: Context, private val store: Store) {
         val report = RunReport(end, trigger, emptyMap(), claimed, skipped, failed, entries)
         if (redeemCalls > 0 || full) store.saveRedeemReport(report)
 
-        // Friendly record for the Activity tab (hourly "nothing changed" watches are not recorded).
+        // Friendly record for the Activity tab ("nothing changed" watches are not recorded).
         if (redeemCalls > 0 || full || notices.isNotEmpty() || loginExpired) {
             val items = ArrayList<RecordItem>()
             entries.forEach { e ->
@@ -567,7 +667,7 @@ class Runner(private val ctx: Context, private val store: Store) {
     private suspend fun keepAlive(games: List<Game>, cr: Credentials): Boolean? {
         for (game in games) {
             val rc = game.redeem ?: continue
-            val acc = HoyoApi.discover(rc.gameBiz, cr).firstOrNull() ?: continue
+            val acc = store.settings.value.accountsToUse(game, profile(game, cr).orEmpty()).firstOrNull() ?: continue
             RunBus.step("${game.title}: keep-alive ping")
             val ping = HoyoApi.redeem(game, rc.keepAliveCode, acc, cr)
             if (ping.networkError || ping.rateLimited) return null
@@ -588,6 +688,8 @@ class Runner(private val ctx: Context, private val store: Store) {
     //  - status 3 = already claimed on the server: never touched again.
     //  - completion is judged by progress: progress >= total but status not 3 means complete and unclaimed,
     //    so claim it (every run, always). Other statuses (e.g. 2) are not interpreted, only progress is.
+    //  - tasks listed in WorkshopGame.playerTaskIds need the player in the game: they are never completed through
+    //    the API, only claimed once their progress is complete.
     //  - otherwise try finish_task once per period. If the server accepts it, claim; if it refuses, the
     //    player has to do it: remember that for the period and just watch its progress from then on.
     // Runs: 30 min after each reset, 15 min before each reset (mandatory claim), and every 6 hours.
@@ -681,6 +783,13 @@ class Runner(private val ctx: Context, private val store: Store) {
                 }
 
                 val complete = t.progress >= t.total
+                if (!complete && wg.needsPlayer(t.id)) {
+                    // Needs the player in the game: never completed through the API, only watched until it is complete.
+                    RunBus.log("• ${t.name}: needs you (${t.progress}/${t.total})")
+                    items.add(RecordItem(wg.id, t.name, "Needs you · ${t.progress}/${t.total}", ItemState.INFO))
+                    needYou++
+                    continue
+                }
                 if (!complete && !force && store.workshopNeedsYou(key)) {
                     // Player has to do it. We only watch its progress (${t.progress}/${t.total}).
                     RunBus.log("• ${t.name}: needs you (${t.progress}/${t.total})")
@@ -1197,9 +1306,10 @@ class Runner(private val ctx: Context, private val store: Store) {
             return manual
         }
 
-        val rc = game.redeem ?: return keep("redeeming isn't supported for ${game.title}")
+        if (game.redeem == null) return keep("redeeming isn't supported for ${game.title}")
         if (!cr.hasLogin || cr.loginExpired) return keep("finish the second sign-in step to redeem automatically")
-        val acc = HoyoApi.discover(rc.gameBiz, cr).firstOrNull() ?: return keep("no linked ${game.title} account found")
+        val acc = store.settings.value.accountsToUse(game, profile(game, cr).orEmpty()).firstOrNull()
+            ?: return keep("no linked ${game.title} account found")
 
         RunBus.step("${wg.label}: redeeming the code for $reward")
         ClaimPacer.pace()

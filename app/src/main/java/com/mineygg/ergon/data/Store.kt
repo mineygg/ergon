@@ -4,13 +4,17 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.mineygg.ergon.core.Account
 import com.mineygg.ergon.core.CheckinStatus
+import com.mineygg.ergon.core.Game
 import com.mineygg.ergon.core.Time
 import com.mineygg.ergon.core.UpdateInfo
 import com.mineygg.ergon.core.WorkshopGame
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * All persistence. Tokens live in EncryptedSharedPreferences (Android Keystore backed);
@@ -21,12 +25,20 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
 
     private val _settings = MutableStateFlow(loadSettings())
     private val _creds = MutableStateFlow(loadCreds())
+    private val _webhooks = MutableStateFlow(Game.entries.filter { secure.getString("webhook:${it.id}", null) != null }.map { it.id }.toSet())
     private val _checkinReport = MutableStateFlow(RunReport.fromJson(sp.getString("report_checkin", null)))
     private val _redeemReport = MutableStateFlow(RunReport.fromJson(sp.getString("report_redeem", null)))
     private val _lastCodeCheck = MutableStateFlow(sp.getLong("last_code_check", 0L))
     private val _history = MutableStateFlow(RunRecord.listFromJson(sp.getString("history", null)))
     private val _disclaimerAccepted = MutableStateFlow(sp.getBoolean("disclaimer", false))
     private val _pending = MutableStateFlow(sp.getStringSet("pending_tasks", null)?.toSet() ?: emptySet())
+    private val _accounts = MutableStateFlow(loadAccounts())
+    init {
+        // The News tab used to read the notification list. It reads the games' event feeds now, with other ids, so
+        // what was saved before is dropped.
+        if (sp.getInt("news_rev", 0) < 3) sp.edit().remove("news_seen").remove("news_items").putInt("news_rev", 3).apply()
+    }
+    private val _news = MutableStateFlow(NewsItem.kept(NewsItem.listFromJson(sp.getString("news_items", null)), System.currentTimeMillis() / 1000))
     private val _workshopInfo = MutableStateFlow(
         WorkshopGame.entries.mapNotNull { g -> WorkshopInfo.fromJson(sp.getString(infoKey(g), null))?.let { g.id to it } }.toMap()
     )
@@ -39,6 +51,15 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
     val history: StateFlow<List<RunRecord>> = _history.asStateFlow()
     val disclaimerAccepted: StateFlow<Boolean> = _disclaimerAccepted.asStateFlow()
     val workshopInfo: StateFlow<Map<String, WorkshopInfo>> = _workshopInfo.asStateFlow()
+
+    /** The game accounts of the HoYoLAB profile (game id -> accounts), as of the last time it was read. */
+    val accounts: StateFlow<Map<String, List<Account>>> = _accounts.asStateFlow()
+
+    /** The games that have a Discord webhook saved (the URLs themselves are secret and never leave [webhook]). */
+    val webhooks: StateFlow<Set<String>> = _webhooks.asStateFlow()
+
+    /** Important HoYoLAB events found so far: the running ones first, then the ones that ended within 30 days. */
+    val news: StateFlow<List<NewsItem>> = _news.asStateFlow()
 
     /**
      * Tasks (CHECKIN, REDEEM, WORKSHOP) whose last automatic run was cut short by the connection. Kept on disk,
@@ -59,7 +80,12 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
             checkinGames = sp.getStringSet("checkinGames", null)?.toSet() ?: legacyGames("checkin", d.checkinGames),
             redeemGames = sp.getStringSet("redeemGames", null)?.toSet() ?: legacyGames("autoRedeem", d.redeemGames),
             workshopGames = sp.getStringSet("workshopGames", null)?.toSet() ?: legacyWorkshopGames(d),
+            newsGames = sp.getStringSet("newsGames", null)?.toSet() ?: d.newsGames,
             exchange = WorkshopGame.entries.associate { g -> g.id to loadExchange(g) },
+            regions = Game.entries.mapNotNull { g ->
+                sp.getString("regions_${g.id}", null)?.split(',')?.filter { it.isNotBlank() }?.toSet()
+                    ?.takeIf { it.isNotEmpty() }?.let { g.id to it }
+            }.toMap(),
             notify = sp.getBoolean("notify", d.notify),
             checkUpdates = sp.getBoolean("checkUpdates", d.checkUpdates)
         )
@@ -102,6 +128,7 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
             .putStringSet("checkinGames", HashSet(n.checkinGames))
             .putStringSet("redeemGames", HashSet(n.redeemGames))
             .putStringSet("workshopGames", HashSet(n.workshopGames))
+            .putStringSet("newsGames", HashSet(n.newsGames))
             .putBoolean("notify", n.notify)
             .putBoolean("checkUpdates", n.checkUpdates)
         for (g in WorkshopGame.entries) {
@@ -111,7 +138,71 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
                 .putString(exKey("exchangePriority", g), p.priority.joinToString(","))
                 .putBoolean(exKey("drawIdle", g), p.drawWhenIdle)
         }
+        for (g in Game.entries) {
+            val picked = n.regions[g.id]
+            if (picked.isNullOrEmpty()) e.remove("regions_${g.id}") else e.putString("regions_${g.id}", picked.sorted().joinToString(","))
+        }
         e.apply()
+    }
+
+    // ── Profile (the game accounts of the HoYoLAB account) ──────────────────
+    private fun loadAccounts(): Map<String, List<Account>> {
+        val text = sp.getString("accounts", null) ?: return emptyMap()
+        return runCatching {
+            val o = JSONObject(text)
+            o.keys().asSequence().associateWith { id ->
+                val arr = o.getJSONArray(id)
+                List(arr.length()) { i ->
+                    val a = arr.getJSONObject(i)
+                    Account(a.getString("uid"), a.getString("region"), a.optString("name"))
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Keeps the profile of [g] as it was just read. Call it only with a real answer, never with a failed read. */
+    fun saveAccounts(g: Game, list: List<Account>) {
+        if (_accounts.value[g.id] == list) return
+        val next = _accounts.value + (g.id to list)
+        _accounts.value = next
+        val o = JSONObject()
+        for ((id, accounts) in next) {
+            o.put(
+                id,
+                JSONArray().apply {
+                    accounts.forEach { put(JSONObject().put("uid", it.uid).put("region", it.region).put("name", it.nickname)) }
+                }
+            )
+        }
+        sp.edit().putString("accounts", o.toString()).apply()
+    }
+
+    // ── HoYoLAB news ────────────────────────────────────────────────────────
+    /** Ids of the newest events already looked at (at most 15 per game, newest first), so none is handled twice. */
+    fun newsSeen(): List<String> = runCatching {
+        val arr = JSONArray(sp.getString("news_seen", null) ?: return emptyList())
+        List(arr.length()) { arr.getString(it) }
+    }.getOrDefault(emptyList())
+
+    fun setNewsSeen(ids: List<String>) {
+        sp.edit().putString("news_seen", JSONArray(ids).toString()).apply()
+    }
+
+    /** Forgets what was seen of one game, so turning it on again starts from scratch (nothing is notified at once). */
+    fun forgetNewsSeen(gameFeedId: Int) {
+        setNewsSeen(newsSeen().filterNot { it.startsWith("$gameFeedId:") })
+    }
+
+    /** Adds events to the News tab and drops the ones that ended more than 30 days ago. */
+    fun addNews(list: List<NewsItem>, nowSeconds: Long) = saveNews(NewsItem.kept(list + _news.value, nowSeconds))
+
+    /** Drops the events that ended more than 30 days ago, also when nothing new came in. */
+    fun pruneNews(nowSeconds: Long) = saveNews(NewsItem.kept(_news.value, nowSeconds))
+
+    private fun saveNews(next: List<NewsItem>) {
+        if (next == _news.value) return
+        _news.value = next
+        sp.edit().putString("news_items", NewsItem.listToJson(next)).apply()
     }
 
     // ── Credentials ─────────────────────────────────────────────────────────
@@ -146,8 +237,13 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
     }
 
     fun clearCredentials() {
-        secure.edit().clear().apply()
+        // Only the sign-in. The Discord webhooks are not part of the account.
+        secure.edit().remove("ltoken").remove("ltuid").remove("cookie_token").remove("exp_h").remove("exp_l").apply()
         _creds.value = Credentials()
+        // The profile and the regions picked belong to the account that signed out. The news doesn't: the feeds are public.
+        sp.edit().remove("accounts").apply()
+        _accounts.value = emptyMap()
+        updateSettings { it.copy(regions = emptyMap()) }
         // Show the disclaimer again on the next sign-in.
         sp.edit().putBoolean("disclaimer", false).apply()
         _disclaimerAccepted.value = false
@@ -209,6 +305,48 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
         sp.edit().putStringSet("claimed:$key", cur).apply()
     }
 
+    // ── Discord webhooks ────────────────────────────────────────────────────
+    fun webhook(gameId: String): String? = secure.getString("webhook:$gameId", null)
+
+    /** Saves the webhook of a game. Codes Ergon has already seen (see [seen]) are not sent: only the ones it hasn't. */
+    fun setWebhook(gameId: String, url: String) {
+        if (webhook(gameId) == url) return
+        secure.edit().putString("webhook:$gameId", url).apply()
+        sp.edit().remove("webhook_ready:$gameId").remove("announced:$gameId").apply()
+        _webhooks.value = _webhooks.value + gameId
+    }
+
+    fun removeWebhook(gameId: String) {
+        secure.edit().remove("webhook:$gameId").apply()
+        sp.edit().remove("webhook_ready:$gameId").remove("announced:$gameId").apply()
+        _webhooks.value = _webhooks.value - gameId
+    }
+
+    /** False until the first look at the code page after the webhook was saved. */
+    fun webhookReady(gameId: String): Boolean = sp.getBoolean("webhook_ready:$gameId", false)
+
+    fun setWebhookReady(gameId: String) {
+        sp.edit().putBoolean("webhook_ready:$gameId", true).apply()
+    }
+
+    /** The codes already posted (or deliberately not posted) to the game's webhook. */
+    fun announced(gameId: String): Set<String> = sp.getStringSet("announced:$gameId", null) ?: emptySet()
+
+    fun setAnnounced(gameId: String, codes: Set<String>) {
+        sp.edit().putStringSet("announced:$gameId", HashSet(codes)).apply()
+    }
+
+    /**
+     * Every code Ergon has seen on a code check, in lower case, kept with or without a webhook. Saving a webhook
+     * starts from this snapshot, so the codes found after the last check are posted at the next one. Null until the
+     * first check that listed codes.
+     */
+    fun seen(gameId: String): Set<String>? = sp.getStringSet("seen:$gameId", null)
+
+    fun setSeen(gameId: String, codes: Set<String>) {
+        sp.edit().putStringSet("seen:$gameId", HashSet(codes)).apply()
+    }
+
     // ── Code page change detection ──────────────────────────────────────────
     fun validators(key: String): Pair<String?, String?> =
         sp.getString("etag:$key", null) to sp.getString("lm:$key", null)
@@ -219,6 +357,10 @@ class Store(ctx: Context, private val secure: SharedPreferences = createSecure(c
 
     fun codesSig(key: String): String? = sp.getString("sig:$key", null)
     fun setCodesSig(key: String, sig: String) = sp.edit().putString("sig:$key", sig).apply()
+
+    /** When the Game8 page of a game was last read (or found unchanged). The page is read about once an hour. */
+    fun siteChecked(gameId: String): Long = sp.getLong("site_checked:$gameId", 0L)
+    fun setSiteChecked(gameId: String, t: Long) = sp.edit().putLong("site_checked:$gameId", t).apply()
 
     /** Time of the last redeem request that reached the server (real code or keep-alive ping). */
     val lastRedeemCall: Long get() = sp.getLong("last_redeem_call", 0L)

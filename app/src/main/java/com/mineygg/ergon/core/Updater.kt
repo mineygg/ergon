@@ -203,7 +203,9 @@ object Updater {
 
     /** True if [a] is a higher version than [b] (numeric, dot separated; a leading "v" is ignored). */
     fun isNewer(a: String, b: String): Boolean {
-        fun parts(v: String) = v.removePrefix("v").split('.', '-', '+').map { it.toIntOrNull() ?: 0 }
+        // Anything after the first '-' or '+' (pre-release / build suffix) is not part of the version.
+        fun parts(v: String) = v.trim().removePrefix("v").substringBefore('-').substringBefore('+')
+            .split('.').map { it.toIntOrNull() ?: 0 }
         val x = parts(a)
         val y = parts(b)
         for (i in 0 until maxOf(x.size, y.size)) {

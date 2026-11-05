@@ -10,29 +10,47 @@ import androidx.webkit.WebViewFeature
 import java.util.Locale
 
 /**
- * Builds request headers from this device's real WebView (Chrome) instead of pretending to be a
- * Windows browser. Cloudflare binds its clearance cookie to the User-Agent, so the same UA is used
- * by the WebView, OkHttp and the HoYo API calls.
+ * Builds request headers from this device's real WebView engine (Chromium) and presents Ergon as its own
+ * browser, the way Edge, Opera or Samsung Internet do: the Chromium engine tokens stay (they are true), a
+ * trailing "Ergon/<version>" names the browser, and the client hints list "Ergon" instead of "Google Chrome".
+ * Ergon never claims to be Google Chrome. Cloudflare binds its clearance cookie to the User-Agent, so the same
+ * UA is used by the WebView, OkHttp and the HoYo API calls.
  */
 object DeviceHeaders {
     private const val FALLBACK =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/130.0.0.0 Mobile Safari/537.36"
 
+    /** The browser's name, shown in the User-Agent and in the client-hint brands. */
+    const val BROWSER_NAME = "Ergon"
+
     @Volatile
-    private var ua: String = FALLBACK
+    private var appVersion: String = "1.0.0"
+
+    @Volatile
+    private var ua: String = withBrand(FALLBACK)
+
+    private fun withBrand(base: String): String = "$base $BROWSER_NAME/$appVersion"
 
     /** Call once from Application.onCreate (main thread). */
     fun init(ctx: Context) {
-        ua = runCatching {
-            // WebView adds "; wv" and "Version/4.0"; real Chrome doesn't.
-            WebSettings.getDefaultUserAgent(ctx).replace("; wv", "").replace("Version/4.0 ", "")
-        }.getOrDefault(FALLBACK)
+        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { appVersion = it }
+        ua = withBrand(
+            runCatching {
+                // A browser's UA has no "; wv" and no "Version/4.0" (those mark a bare WebView).
+                WebSettings.getDefaultUserAgent(ctx).replace("; wv", "").replace("Version/4.0 ", "")
+            }.getOrDefault(FALLBACK)
+        )
     }
 
     fun userAgent(): String = ua
 
     private fun chromeMajor(): String = Regex("""Chrome/(\d+)""").find(ua)?.groupValues?.get(1) ?: "130"
+
+    private fun appMajor(): String = appVersion.substringBefore('.').ifBlank { "1" }
 
     fun acceptLanguage(): String {
         val l = Locale.getDefault()
@@ -40,7 +58,7 @@ object DeviceHeaders {
         return if (l.language == "en") "$tag,en;q=0.9" else "$tag,${l.language};q=0.9,en;q=0.8"
     }
 
-    /** Headers a Chrome-on-Android top-level page navigation would send. */
+    /** Headers a Chromium-based browser on Android sends for a top-level page navigation. */
     fun navigation(): Map<String, String> {
         val v = chromeMajor()
         return linkedMapOf(
@@ -48,7 +66,7 @@ object DeviceHeaders {
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Accept-Language" to acceptLanguage(),
             "Upgrade-Insecure-Requests" to "1",
-            "sec-ch-ua" to "\"Chromium\";v=\"$v\", \"Google Chrome\";v=\"$v\", \"Not_A Brand\";v=\"24\"",
+            "sec-ch-ua" to "\"Chromium\";v=\"$v\", \"$BROWSER_NAME\";v=\"${appMajor()}\", \"Not_A Brand\";v=\"24\"",
             "sec-ch-ua-mobile" to "?1",
             "sec-ch-ua-platform" to "\"Android\"",
             "Sec-Fetch-Site" to "none",
@@ -62,8 +80,8 @@ object DeviceHeaders {
 
     /**
      * A plain WebView reports itself as "Android WebView" in the client-hint brands (Sec-CH-UA and
-     * navigator.userAgentData) even when the User-Agent string says Chrome. Make them agree, so
-     * the browser identity is consistent everywhere a page can look.
+     * navigator.userAgentData). Report the same browser as the User-Agent string, Ergon on Chromium, so the
+     * identity is consistent everywhere a page can look.
      */
     fun applyClientHints(wv: WebView) {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) return
@@ -76,7 +94,7 @@ object DeviceHeaders {
                 .setBrandVersionList(
                     listOf(
                         brand("Chromium", major, full),
-                        brand("Google Chrome", major, full),
+                        brand(BROWSER_NAME, appMajor(), appVersion),
                         brand("Not_A Brand", "24", "24.0.0.0")
                     )
                 )

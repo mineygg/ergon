@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,7 @@ import com.mineygg.ergon.core.WorkshopGame
 private enum class Tab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Default.Home),
     Activity("Activity", Icons.Default.Info),
+    News("News", Icons.Default.Notifications),
     Settings("Settings", Icons.Default.Settings)
 }
 
@@ -109,6 +111,7 @@ fun AppRoot(vm: MainViewModel) {
             when (tab) {
                 Tab.Home -> HomeScreen(vm, pad, openLogin)
                 Tab.Activity -> ActivityScreen(vm, pad)
+                Tab.News -> NewsScreen(vm, pad)
                 Tab.Settings -> SettingsScreen(vm, pad, openLogin, onLicense = { showLicense = true }, onConfigure = { configGame = it.id })
             }
         }

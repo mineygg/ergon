@@ -1,5 +1,6 @@
 package com.mineygg.ergon.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,11 +13,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -98,14 +102,14 @@ fun SettingsScreen(
         item {
             AppCard {
                 SectionTitle("Schedule")
-                ToggleRow("Run automatically", "Daily check-in and hourly code watch, in the background", s.autoRun) { on ->
+                ToggleRow("Run automatically", "Daily check-in and code watch every 30 minutes, in the background", s.autoRun) { on ->
                     vm.updateSettings { it.copy(autoRun = on) }
                 }
                 HorizontalDivider(color = cs.outlineVariant)
                 Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
                     Text("Check-in at ${Time.checkinLocalLabel()}", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                     VSpace(2)
-                    Text("Gift codes hourly", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                    Text("Gift codes every 30 minutes", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                     VSpace(2)
                     Text("Web events and auto exchange around each game reset", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                 }
@@ -187,6 +191,42 @@ fun SettingsScreen(
             }
         }
 
+        // ── Help keep Android open ──
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                color = cs.error.copy(alpha = 0.10f),
+                border = BorderStroke(1.dp, cs.error.copy(alpha = 0.55f))
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    SectionTitle("Help keep Android open", cs.error)
+                    Text(
+                        "Ergon is installed as an APK, outside the Play Store. Google's plans to limit installing apps " +
+                            "from outside its store could affect apps like it. These resources explain what is " +
+                            "changing and how to help.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurface
+                    )
+                    VSpace(12)
+                    Button(
+                        onClick = { uriHandler.openUri(AppInfo.KEEP_ANDROID_OPEN_URL) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = cs.error, contentColor = cs.onError)
+                    ) { Text("keepandroidopen.org") }
+                    VSpace(8)
+                    OutlinedButton(
+                        onClick = { uriHandler.openUri(AppInfo.KEEP_ANDROID_OPEN_PETITION_URL) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, cs.error.copy(alpha = 0.7f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = cs.error)
+                    ) { Text("Sign the petition on Change.org") }
+                }
+            }
+        }
+
         // ── Account ──
         item {
             AppCard {
@@ -212,7 +252,7 @@ fun SettingsScreen(
 
         item {
             Text(
-                "Ergon ${Updater.currentVersion(context)} · tokens never leave this device",
+                "Ergon ${Updater.currentVersion(context)} · tokens are stored encrypted here and only sent to HoYoverse",
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp)
@@ -246,11 +286,11 @@ private fun gameSummary(s: Settings, g: Game): String {
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+private fun SectionTitle(text: String, color: Color = MaterialTheme.colorScheme.primary) {
     Text(
         text.uppercase(),
         style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
+        color = color,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.sp
     )

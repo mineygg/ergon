@@ -43,7 +43,7 @@ object HoyoApi {
         header("x-rpc-platform", "4")
         header("Referer", "https://act.hoyolab.com/")
         header("Origin", "https://act.hoyolab.com")
-        header("Cookie", cookie)
+        if (cookie.isNotBlank()) header("Cookie", cookie)
     }
 
     // ── Daily check-in ──────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ object HoyoApi {
         }
     }
 
-    private fun parseCheckin(text: String): CheckinResult {
+    internal fun parseCheckin(text: String): CheckinResult {
         val json = runCatching { JSONObject(text) }.getOrNull()
             ?: return CheckinResult(CheckinStatus.FAILED, "Invalid response")
         val code = json.optInt("retcode", Int.MIN_VALUE)
@@ -83,29 +83,38 @@ object HoyoApi {
     }
 
     // ── Account discovery ───────────────────────────────────────────────────
-    suspend fun discover(gameBiz: String, cr: Credentials): List<Account> = withContext(Dispatchers.IO) {
+    /**
+     * The accounts the HoYoLAB profile lists for one game, or null when the profile couldn't be read (no connection,
+     * expired session). An empty list is a real answer: the user has no account in that game.
+     */
+    suspend fun discoverOrNull(gameBiz: String, cr: Credentials): List<Account>? = withContext(Dispatchers.IO) {
         try {
             val req = Request.Builder()
                 .url("https://sg-public-api.hoyolab.com/binding/api/getUserGameRolesByLtoken?game_biz=$gameBiz")
                 .hoyoHeaders(cr.hoyolabCookie())
                 .get()
                 .build()
-            Http.client.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string().orEmpty())
-                if (json.optInt("retcode", -1) != 0) {
-                    emptyList<Account>()
-                } else {
-                    val arr = json.getJSONObject("data").getJSONArray("list")
-                    List(arr.length()) { i ->
-                        val o = arr.getJSONObject(i)
-                        Account(o.getString("game_uid"), o.getString("region"), o.optString("nickname"))
-                    }
-                }
-            }
+            Http.client.newCall(req).execute().use { resp -> parseAccounts(resp.body?.string().orEmpty()) }
         } catch (e: Exception) {
-            emptyList<Account>()
+            null
         }
     }
+
+    /** The accounts in a getUserGameRolesByLtoken answer. Null when the answer is an error or can't be read. */
+    internal fun parseAccounts(text: String): List<Account>? = runCatching {
+        val json = JSONObject(text)
+        if (json.optInt("retcode", -1) != 0) {
+            null
+        } else {
+            val arr = json.getJSONObject("data").getJSONArray("list")
+            List(arr.length()) { i ->
+                val o = arr.getJSONObject(i)
+                Account(o.getString("game_uid"), o.getString("region"), o.optString("nickname"))
+            }
+        }
+    }.getOrNull()
+
+    suspend fun discover(gameBiz: String, cr: Credentials): List<Account> = discoverOrNull(gameBiz, cr) ?: emptyList()
 
     /** True if these HoYoLAB tokens are currently accepted by the API. */
     suspend fun validateHoyolab(ltoken: String, ltuid: String): Boolean = withContext(Dispatchers.IO) {
@@ -133,17 +142,18 @@ object HoyoApi {
                 b.get()
             }
             Http.client.newCall(b.build()).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                val json = runCatching { JSONObject(text) }.getOrNull()
-                if (json == null) {
-                    ApiResult(Int.MIN_VALUE, "HTTP ${resp.code}: unreadable response", null, resp.code)
-                } else {
-                    ApiResult(json.optInt("retcode", Int.MIN_VALUE), json.optString("message"), json.optJSONObject("data"), resp.code)
-                }
+                parseApi(resp.code, resp.body?.string().orEmpty())
             }
         } catch (e: IOException) {
             ApiResult(Int.MIN_VALUE, e.message ?: "Network error", null, 0, network = true)
         }
+    }
+
+    /** An answer of the HoYoLAB API: its retcode, message and data. An answer that isn't JSON has the retcode [Int.MIN_VALUE]. */
+    internal fun parseApi(httpCode: Int, text: String): ApiResult {
+        val json = runCatching { JSONObject(text) }.getOrNull()
+            ?: return ApiResult(Int.MIN_VALUE, "HTTP $httpCode: unreadable response", null, httpCode)
+        return ApiResult(json.optInt("retcode", Int.MIN_VALUE), json.optString("message"), json.optJSONObject("data"), httpCode)
     }
 
     // ── Code redemption ─────────────────────────────────────────────────────
@@ -166,35 +176,35 @@ object HoyoApi {
                     .build()
                 val req = Request.Builder().url(url).hoyoHeaders(cr.loginCookie()).get().build()
 
-                Http.client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string().orEmpty()
-
-                    if (resp.code == 429 || text.contains("too many requests", ignoreCase = true)) {
-                        return@use RedeemResult(false, "Rate limited (HTTP 429)", rateLimited = true)
-                    }
-                    if (text.startsWith("<")) {
-                        return@use RedeemResult(false, "Server returned HTML (rate limit or CDN block)", rateLimited = true)
-                    }
-                    val json = runCatching { JSONObject(text) }.getOrNull()
-                        ?: return@use RedeemResult(false, "Non-JSON response (HTTP ${resp.code})")
-
-                    val retcode = json.optInt("retcode", Int.MIN_VALUE)
-                    val message = json.optString("message").ifEmpty { "Unknown error" }
-
-                    if (retcode == 0) {
-                        RedeemResult(true, "Redeemed!")
-                    } else {
-                        RedeemResult(
-                            success = false,
-                            message = "[$retcode] $message",
-                            alreadyClaimed = retcode in ALREADY_CLAIMED,
-                            tokenExpired = retcode == -1071,
-                            rateLimited = retcode in RATE_LIMITED
-                        )
-                    }
-                }
+                Http.client.newCall(req).execute().use { resp -> parseRedeem(resp.code, resp.body?.string().orEmpty()) }
             } catch (e: IOException) {
                 RedeemResult(false, "Request failed: ${e.message}", networkError = true)
             }
         }
+
+    /** What a redeem answer means: redeemed, a code that can't be used again, a token or rate limit problem, or a failure. */
+    internal fun parseRedeem(httpCode: Int, text: String): RedeemResult {
+        if (httpCode == 429 || text.contains("too many requests", ignoreCase = true)) {
+            return RedeemResult(false, "Rate limited (HTTP 429)", rateLimited = true)
+        }
+        if (text.startsWith("<")) {
+            return RedeemResult(false, "Server returned HTML (rate limit or CDN block)", rateLimited = true)
+        }
+        val json = runCatching { JSONObject(text) }.getOrNull()
+            ?: return RedeemResult(false, "Non-JSON response (HTTP $httpCode)")
+
+        val retcode = json.optInt("retcode", Int.MIN_VALUE)
+        val message = json.optString("message").ifEmpty { "Unknown error" }
+        return if (retcode == 0) {
+            RedeemResult(true, "Redeemed!")
+        } else {
+            RedeemResult(
+                success = false,
+                message = "[$retcode] $message",
+                alreadyClaimed = retcode in ALREADY_CLAIMED,
+                tokenExpired = retcode == -1071,
+                rateLimited = retcode in RATE_LIMITED
+            )
+        }
+    }
 }
